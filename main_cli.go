@@ -498,6 +498,9 @@ func f_genkey() error {
 func f_sign() error {
 	if Cfg.Private != nil { // make sign
 		// 1. set output path
+		if len(Cfg.Files) == 0 {
+			return errors.New("no file to sign")
+		}
 		output := Cfg.Output
 		if output == "" {
 			output = "./"

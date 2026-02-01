@@ -18,10 +18,6 @@ import (
 	"github.com/k-atusa/USAG-Lib/Opsec"
 )
 
-// go mod init example.com
-// go mod tidy
-// go build -ldflags="-s -w" -trimpath -o yascli.exe lib.go main_cli.go
-
 // command line parser
 type Config struct {
 	Mode    string   // zip unzip send recv genkey sign enc dec version help
@@ -941,7 +937,7 @@ func main() {
 	case "dec":
 		err = f_dec()
 	case "version":
-		fmt.Println("2026 @k-atusa USAG-Yas-cli v0.1")
+		fmt.Println("2026 @k-atusa [USAG] YAS-lite v0.1")
 	default: // help
 		fmt.Println("-m mode [zip|unzip|send|recv|genkey|sign|enc|dec|version|help]")
 		fmt.Println("-tmp tempDir, -o outputDir/Path, -t text/ip:port")

@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -244,12 +245,12 @@ func f_unzip() error {
 
 func f_send() error {
 	// 1. Validate inputs
-	if Cfg.Text == "" { // IP:Port
-		return errors.New("receiver address required (-t ip:port)")
+	targetAddr := Cfg.Text // IP:Port
+	if targetAddr == "" {
+		targetAddr = "127.0.0.1"
 	}
-	targetAddr := Cfg.Text
 	if !strings.Contains(targetAddr, ":") {
-		targetAddr += ":8888" // default port
+		targetAddr += ":8002" // default port
 	}
 
 	// 2. zip data
@@ -268,7 +269,16 @@ func f_send() error {
 
 	// 3. Connect to receiver
 	fmt.Printf("Connecting to %s...\n", targetAddr)
-	conn, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
+	var conn net.Conn
+	var err error
+	for range 5 { // 5 attempts
+		conn, err = net.DialTimeout("tcp", targetAddr, 10*time.Second)
+		if err == nil {
+			break
+		}
+		fmt.Printf("connection failed and waiting, %s\n", err)
+		time.Sleep(3 * time.Second)
+	}
 	if err != nil {
 		return err
 	}
@@ -324,9 +334,10 @@ func f_send() error {
 
 	// 6. Send
 	sendPath := filepath.Join(Cfg.TempDir, "yas2send.temp")
-	err = p.SendFile(zipPath, sendPath, Cfg.SMsg)
+	fromPub, toPub, err := p.SendFile(zipPath, sendPath, Cfg.SMsg)
 	stop <- true
 	<-done
+	fmt.Printf("[transfer] from %s to %s\n", hex.EncodeToString(Opsec.Crc32(fromPub)), hex.EncodeToString(Opsec.Crc32(toPub)))
 	if err != nil {
 		return err
 	}
@@ -336,7 +347,7 @@ func f_send() error {
 
 func f_recv() error {
 	// 1. Setup Listener, print IPs
-	port := "8888"
+	port := "8002"
 	if Cfg.Text != "" {
 		port = Cfg.Text // -t flag used as port
 	}
@@ -355,6 +366,7 @@ func f_recv() error {
 		return err
 	}
 	defer listener.Close()
+	listener.(*net.TCPListener).SetDeadline(time.Now().Add(90 * time.Second)) // 90s timeout
 
 	// 2. Accept Connection
 	conn, err := listener.Accept()
@@ -408,9 +420,10 @@ func f_recv() error {
 	}()
 
 	// 5. Receive archive file
-	smsg, err := p.ReceiveFile(zipPath, tempPath)
+	fromPub, toPub, smsg, err := p.ReceiveFile(zipPath, tempPath)
 	stop <- true
 	<-done
+	fmt.Printf("[transfer] from %s to %s\n", hex.EncodeToString(Opsec.Crc32(fromPub)), hex.EncodeToString(Opsec.Crc32(toPub)))
 	if err != nil {
 		return err
 	}
@@ -430,7 +443,7 @@ func f_recv() error {
 
 	// 7. Print Secure Message
 	if smsg != "" {
-		fmt.Printf("\n[SMSG]: %s\n", smsg)
+		fmt.Printf("\n[smsg] %s\n", smsg)
 	}
 	fmt.Println("Session completed successfully")
 	return nil
@@ -673,20 +686,13 @@ func f_enc() error {
 	}
 
 	var err error
-	if len(Cfg.Files) == 0 { // msg-only mode
-		if Cfg.Public == nil {
-			ohead, err = o.Encpw(method, []byte(Cfg.PW), Cfg.KF)
-		} else {
-			ohead, err = o.Encpub(method, Cfg.Public, Cfg.Private)
-		}
-
-	} else {
+	if len(Cfg.Files) != 0 {
 		o.Size = AfterSize(zipSize)
-		if Cfg.Public == nil {
-			ohead, err = o.Encpw(method, []byte(Cfg.PW), Cfg.KF)
-		} else {
-			ohead, err = o.Encpub(method, Cfg.Public, Cfg.Private)
-		}
+	}
+	if Cfg.Public == nil {
+		ohead, err = o.Encpw(method, []byte(Cfg.PW), Cfg.KF)
+	} else {
+		ohead, err = o.Encpub(method, Cfg.Public, Cfg.Private)
 	}
 	if err != nil {
 		return err
@@ -788,7 +794,7 @@ func f_dec() error {
 	ops := new(Opsec.Opsec)
 	ops.View(headBytes)
 	if ops.Msg != "" {
-		fmt.Printf("\n[MSG]: %s\n\n", ops.Msg)
+		fmt.Printf("\n[msg] %s\n\n", ops.Msg)
 	}
 
 	// 3. Decrypt opsec header, print smsg
@@ -809,7 +815,7 @@ func f_dec() error {
 		return err
 	}
 	if ops.Smsg != "" {
-		fmt.Printf("\n[SMSG]: %s\n\n", ops.Smsg)
+		fmt.Printf("\n[smsg] %s\n\n", ops.Smsg)
 	}
 
 	// 4. Decrypt body
@@ -841,7 +847,7 @@ func f_dec() error {
 			return err
 		}
 		if ops.Name == "" {
-			err = os.WriteFile(filepath.Join(output, "noname.bin"), dec, 0644)
+			err = os.WriteFile(filepath.Join(output, "output.bin"), dec, 0644)
 		} else {
 			err = os.WriteFile(filepath.Join(output, ops.Name), dec, 0644)
 		}
@@ -913,7 +919,7 @@ var Cfg Config
 func main() {
 	defer func() {
 		if err := recover(); err != nil {
-			fmt.Printf("critical: %v", err)
+			fmt.Printf("[PANIC] %v", err)
 		}
 	}()
 	var err error
@@ -946,6 +952,6 @@ func main() {
 		fmt.Println("-legacy : usa RSA, -bits keyBits, -zip : use zip")
 	}
 	if err != nil {
-		fmt.Printf("\nerror: %v\n", err)
+		fmt.Printf("\n[ERROR] %v\n", err)
 	}
 }

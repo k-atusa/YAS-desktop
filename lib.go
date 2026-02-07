@@ -277,7 +277,7 @@ func (p *TPprotocol) syncStatus(stop chan bool) {
 	}
 }
 
-// handshake with receiver, returns peer (public key, my public key, my private key)
+// handshake with receiver, returns (peer public key, my public key, my private key)
 func (p *TPprotocol) handshakeSend() ([]byte, []byte, []byte, error) {
 	// 1. Make key pair
 	var myPub, myPriv []byte
@@ -382,13 +382,13 @@ func (p *TPprotocol) handshakeReceive() ([]byte, []byte, []byte, error) {
 	return peerPub, myPub, myPriv, nil
 }
 
-// Send memory data
-func (p *TPprotocol) SendData(data []byte, smsg string) error {
+// Send memory data, public key is [from, to]
+func (p *TPprotocol) SendData(data []byte, smsg string) ([]byte, []byte, error) {
 	// 1. Handshake
 	p.setStage(STAGE_HANDSHAKE)
-	peerPub, _, myPriv, err := p.handshakeSend()
+	peerPub, myPub, myPriv, err := p.handshakeSend()
 	if err != nil {
-		return err
+		return myPub, peerPub, err
 	}
 	stop := make(chan bool)
 	go p.syncStatus(stop)
@@ -410,7 +410,7 @@ func (p *TPprotocol) SendData(data []byte, smsg string) error {
 	if err != nil {
 		p.setStage(STAGE_ERROR)
 		stop <- false
-		return err
+		return myPub, peerPub, err
 	}
 
 	// 3. Encrypt body
@@ -421,7 +421,7 @@ func (p *TPprotocol) SendData(data []byte, smsg string) error {
 	if err != nil {
 		p.setStage(STAGE_ERROR)
 		stop <- false
-		return err
+		return myPub, peerPub, err
 	}
 
 	// 4. Build Payload with Framing
@@ -429,7 +429,7 @@ func (p *TPprotocol) SendData(data []byte, smsg string) error {
 	if err := ops.Write(&headerBuf, opsHead); err != nil {
 		p.setStage(STAGE_ERROR)
 		stop <- false
-		return err
+		return myPub, peerPub, err
 	}
 	payload := append(headerBuf.Bytes(), encBody...)
 	encBody = nil
@@ -442,7 +442,7 @@ func (p *TPprotocol) SendData(data []byte, smsg string) error {
 	p.setTotal(totalSize)
 	if _, err := p.conn.Write(Opsec.EncodeInt(totalSize, 8)); err != nil {
 		p.setStage(STAGE_ERROR)
-		return err
+		return myPub, peerPub, err
 	}
 
 	// 6. send payload
@@ -451,7 +451,7 @@ func (p *TPprotocol) SendData(data []byte, smsg string) error {
 		n, err := p.conn.Write(payload[currentSent:min(currentSent+1024, totalSize)])
 		if err != nil {
 			p.setStage(STAGE_ERROR)
-			return err
+			return myPub, peerPub, err
 		}
 		currentSent += uint64(n)
 		p.setSent(currentSent)
@@ -461,24 +461,24 @@ func (p *TPprotocol) SendData(data []byte, smsg string) error {
 	var term [8]byte
 	if _, err := io.ReadFull(p.conn, term[:]); err != nil {
 		p.setStage(STAGE_ERROR)
-		return err
+		return myPub, peerPub, err
 	}
 	if term != p.zero8 {
 		p.setStage(STAGE_ERROR)
-		return errors.New("abnormal termination signal")
+		return myPub, peerPub, errors.New("abnormal termination signal")
 	}
 	p.setStage(STAGE_COMPLETE)
-	return nil
+	return myPub, peerPub, nil
 }
 
-// Receive to memory data
-func (p *TPprotocol) ReceiveData() ([]byte, string, error) {
+// Receive to memory data, public key is [from, to]
+func (p *TPprotocol) ReceiveData() ([]byte, []byte, []byte, string, error) {
 	// 1. Handshake
 	p.setStage(STAGE_HANDSHAKE)
-	peerPub, _, myPriv, err := p.handshakeReceive()
+	peerPub, myPub, myPriv, err := p.handshakeReceive()
 	if err != nil {
 		p.setStage(STAGE_ERROR)
-		return nil, "", err
+		return peerPub, myPub, nil, "", err
 	}
 
 	// 2. Wait for Status (Start Signal)
@@ -488,14 +488,14 @@ func (p *TPprotocol) ReceiveData() ([]byte, string, error) {
 	for {
 		if _, err := io.ReadFull(p.conn, buf8[:]); err != nil {
 			p.setStage(STAGE_ERROR)
-			return nil, "", err
+			return peerPub, myPub, nil, "", err
 		}
 
 		if buf8 == p.zero8 {
 			continue // Still preparing
 		} else if buf8 == p.max8 {
 			p.setStage(STAGE_ERROR)
-			return nil, "", errors.New("remote error reported")
+			return peerPub, myPub, nil, "", errors.New("remote error reported")
 		} else {
 			totalSize = Opsec.DecodeInt(buf8[:])
 			p.setTotal(totalSize) // Total transmission size (Header + Body)
@@ -520,34 +520,37 @@ func (p *TPprotocol) ReceiveData() ([]byte, string, error) {
 				break
 			}
 			p.setStage(STAGE_ERROR)
-			return nil, "", err
+			return peerPub, myPub, nil, "", err
 		}
 	}
 
-	// 4. Parse & Decrypt Header
+	// 4. Send Termination
+	if _, err := p.conn.Write(p.zero8[:]); err != nil {
+		p.setStage(STAGE_ERROR)
+		return peerPub, myPub, nil, "", err
+	}
+
+	// 5. Parse & Decrypt Header
 	bufReader := bytes.NewReader(payload)
 	ops := new(Opsec.Opsec)
 	headBytes, err := ops.Read(bufReader, 0)
 	if err != nil {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return nil, "", err
+		return peerPub, myPub, nil, "", err
 	}
 	ops.View(headBytes)
 	if err := ops.Decpub(myPriv, peerPub); err != nil {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return nil, "", err
+		return peerPub, myPub, nil, "", err
 	}
 
-	// 5. Decrypt Body
+	// 6. Decrypt Body
 	p.setStage(STAGE_ENCRYPTING)
 	bodyOffset := totalSize - uint64(bufReader.Len())
 	encBody := payload[bodyOffset:]
 	if ops.BodyAlgo != "gcm1" {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return nil, "", errors.New("unsupported body algorithm: " + ops.BodyAlgo)
+		return peerPub, myPub, nil, "", errors.New("unsupported body algorithm: " + ops.BodyAlgo)
 	}
 	var key [44]byte
 	copy(key[:], ops.BodyKey)
@@ -555,26 +558,20 @@ func (p *TPprotocol) ReceiveData() ([]byte, string, error) {
 	decBody, err := aes.DeAESGCM(key, encBody)
 	if err != nil {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return nil, "", err
+		return peerPub, myPub, nil, "", err
 	}
 
-	// 6. Send Termination
-	if _, err := p.conn.Write(p.zero8[:]); err != nil {
-		p.setStage(STAGE_ERROR)
-		return nil, "", err
-	}
 	p.setStage(STAGE_COMPLETE)
-	return decBody, ops.Smsg, nil
+	return peerPub, myPub, decBody, ops.Smsg, nil
 }
 
-// Send file data
-func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) error {
+// Send file data, public key is [from, to]
+func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) ([]byte, []byte, error) {
 	// 1. Handshake
 	p.setStage(STAGE_HANDSHAKE)
-	peerPub, _, myPriv, err := p.handshakeSend()
+	peerPub, myPub, myPriv, err := p.handshakeSend()
 	if err != nil {
-		return err
+		return myPub, peerPub, err
 	}
 
 	// 2. Prepare Source File
@@ -586,7 +583,7 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 	if err != nil {
 		p.setStage(STAGE_ERROR)
 		stop <- false
-		return err
+		return myPub, peerPub, err
 	}
 	defer srcFile.Close()
 
@@ -595,7 +592,7 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 	if err != nil {
 		p.setStage(STAGE_ERROR)
 		stop <- false
-		return err
+		return myPub, peerPub, err
 	}
 	originalSize := srcInfo.Size()
 	encryptedSize := AfterSize(originalSize)
@@ -618,7 +615,7 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 	if err != nil {
 		p.setStage(STAGE_ERROR)
 		stop <- false
-		return err
+		return myPub, peerPub, err
 	}
 
 	// 4. Create Temp File & Write Everything (Header + Body)
@@ -628,14 +625,14 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 	if err != nil {
 		p.setStage(STAGE_ERROR)
 		stop <- false
-		return err
+		return myPub, peerPub, err
 	}
 
 	// Write Opsec Header to Temp File
 	if err := ops.Write(tempFile, opsHead); err != nil {
 		p.setStage(STAGE_ERROR)
 		stop <- false
-		return err
+		return myPub, peerPub, err
 	}
 
 	// Encrypt & Append Body to Temp File
@@ -646,7 +643,7 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 	if err != nil {
 		p.setStage(STAGE_ERROR)
 		stop <- false
-		return err
+		return myPub, peerPub, err
 	}
 
 	// 5. Transfer the Entire Temp File
@@ -657,7 +654,7 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 	tempInfo, err := tempFile.Stat()
 	if err != nil {
 		p.setStage(STAGE_ERROR)
-		return err
+		return myPub, peerPub, err
 	}
 	totalSize := uint64(tempInfo.Size())
 
@@ -666,13 +663,13 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 	p.setTotal(totalSize)
 	if _, err := p.conn.Write(Opsec.EncodeInt(totalSize, 8)); err != nil {
 		p.setStage(STAGE_ERROR)
-		return err
+		return myPub, peerPub, err
 	}
 
 	// Rewind Temp File to beginning
 	if _, err := tempFile.Seek(0, 0); err != nil {
 		p.setStage(STAGE_ERROR)
-		return err
+		return myPub, peerPub, err
 	}
 
 	// Stream Send
@@ -684,7 +681,7 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 			nw, wErr := p.conn.Write(buf[0:nr])
 			if wErr != nil {
 				p.setStage(STAGE_ERROR)
-				return wErr
+				return myPub, peerPub, wErr
 			}
 			currentSent += uint64(nw)
 			p.setSent(currentSent)
@@ -694,7 +691,7 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 		}
 		if rErr != nil {
 			p.setStage(STAGE_ERROR)
-			return rErr
+			return myPub, peerPub, rErr
 		}
 	}
 
@@ -702,24 +699,24 @@ func (p *TPprotocol) SendFile(filePath string, tempPath string, smsg string) err
 	var term [8]byte
 	if _, err := io.ReadFull(p.conn, term[:]); err != nil {
 		p.setStage(STAGE_ERROR)
-		return err
+		return myPub, peerPub, err
 	}
 	if term != p.zero8 {
 		p.setStage(STAGE_ERROR)
-		return errors.New("abnormal termination signal")
+		return myPub, peerPub, errors.New("abnormal termination signal")
 	}
 	p.setStage(STAGE_COMPLETE)
-	return nil
+	return myPub, peerPub, nil
 }
 
-// Receive to file
-func (p *TPprotocol) ReceiveFile(savePath string, tempPath string) (string, error) {
+// Receive to file, public key is [from, to]
+func (p *TPprotocol) ReceiveFile(savePath string, tempPath string) ([]byte, []byte, string, error) {
 	// 1. Handshake
 	p.setStage(STAGE_HANDSHAKE)
-	peerPub, _, myPriv, err := p.handshakeReceive()
+	peerPub, myPub, myPriv, err := p.handshakeReceive()
 	if err != nil {
 		p.setStage(STAGE_ERROR)
-		return "", err
+		return peerPub, myPub, "", err
 	}
 
 	// 2. Wait for Status (Start Signal)
@@ -729,14 +726,14 @@ func (p *TPprotocol) ReceiveFile(savePath string, tempPath string) (string, erro
 	for {
 		if _, err := io.ReadFull(p.conn, buf8[:]); err != nil {
 			p.setStage(STAGE_ERROR)
-			return "", err
+			return peerPub, myPub, "", err
 		}
 
 		if buf8 == p.zero8 {
 			continue // Still preparing
 		} else if buf8 == p.max8 {
 			p.setStage(STAGE_ERROR)
-			return "", errors.New("remote error reported")
+			return peerPub, myPub, "", errors.New("remote error reported")
 		} else {
 			totalSize = Opsec.DecodeInt(buf8[:])
 			p.setTotal(totalSize) // Total transmission size (Header + Body)
@@ -750,7 +747,7 @@ func (p *TPprotocol) ReceiveFile(savePath string, tempPath string) (string, erro
 	defer tempFile.Close()
 	if err != nil {
 		p.setStage(STAGE_ERROR)
-		return "", err
+		return peerPub, myPub, "", err
 	}
 
 	// Stream Receive
@@ -764,7 +761,7 @@ func (p *TPprotocol) ReceiveFile(savePath string, tempPath string) (string, erro
 		if n > 0 {
 			if _, wErr := tempFile.Write(buf[:n]); wErr != nil {
 				p.setStage(STAGE_ERROR)
-				return "", wErr
+				return peerPub, myPub, "", wErr
 			}
 			currentReceived += uint64(n)
 			p.setSent(currentReceived)
@@ -778,15 +775,20 @@ func (p *TPprotocol) ReceiveFile(savePath string, tempPath string) (string, erro
 				break
 			}
 			p.setStage(STAGE_ERROR)
-			return "", rErr
+			return peerPub, myPub, "", rErr
 		}
 	}
 
-	// 4. Parse & Decrypt Header from Temp File
+	// 4. Send Termination
+	if _, err := p.conn.Write(p.zero8[:]); err != nil {
+		p.setStage(STAGE_ERROR)
+		return peerPub, myPub, "", err
+	}
+
+	// 5. Parse & Decrypt Header from Temp File
 	if _, err := tempFile.Seek(0, 0); err != nil {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return "", err
+		return peerPub, myPub, "", err
 	}
 
 	// Read Header, View
@@ -794,31 +796,27 @@ func (p *TPprotocol) ReceiveFile(savePath string, tempPath string) (string, erro
 	headBytes, err := ops.Read(tempFile, 0)
 	if err != nil {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return "", err
+		return peerPub, myPub, "", err
 	}
 	ops.View(headBytes)
 	if err := ops.Decpub(myPriv, peerPub); err != nil {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return "", err
+		return peerPub, myPub, "", err
 	}
 
-	// 5. Decrypt Body to Save File
+	// 6. Decrypt Body to Save File
 	p.setStage(STAGE_ENCRYPTING)
 	outFile, err := os.Create(savePath)
 	if err != nil {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return "", err
+		return peerPub, myPub, "", err
 	}
 
 	// get body key
 	defer outFile.Close()
 	if ops.BodyAlgo != "gcmx1" {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return "", errors.New("unsupported body algorithm: " + ops.BodyAlgo)
+		return peerPub, myPub, "", errors.New("unsupported body algorithm: " + ops.BodyAlgo)
 	}
 	var key [44]byte
 	copy(key[:], ops.BodyKey)
@@ -828,15 +826,9 @@ func (p *TPprotocol) ReceiveFile(savePath string, tempPath string) (string, erro
 	err = aes.DeAESGCMx(key, tempFile, ops.Size, outFile, 0)
 	if err != nil {
 		p.setStage(STAGE_ERROR)
-		p.conn.Write(p.max8[:])
-		return "", err
+		return peerPub, myPub, "", err
 	}
 
-	// 6. Send Termination
-	if _, err := p.conn.Write(p.zero8[:]); err != nil {
-		p.setStage(STAGE_ERROR)
-		return "", err
-	}
 	p.setStage(STAGE_COMPLETE)
-	return ops.Smsg, nil
+	return peerPub, myPub, ops.Smsg, nil
 }

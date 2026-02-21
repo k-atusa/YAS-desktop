@@ -37,6 +37,26 @@ Algorithm flags
 
 ## GUI Usage
 
+| function | Info | 정보 |
+| :--- | :--- | :--- |
+| Pack/Unpack | Handles archive packing and unpacking. | 아카이브 패킹과 언패킹 기능입니다. |
+| Sign/Verify | Generates and verifies digital signatures. | 전자서명 생성/검증 기능입니다. |
+| Send | Transfers files to devices on the local network via the TP1 protocol. | TP1 프로토콜로 근거리 네트워크 상의 기기로 파일을 전송합니다. |
+| Receive | Receives files using the TP1 protocol. | TP1 프로토콜로 파일을 수신합니다. |
+| Encrypt pw | Encrypts files or messages based on a password. | 비밀번호 기반으로 파일이나 메세지를 암호화합니다. |
+| Decrypt pw | Decrypts files or messages based on a password. | 비밀번호 기반으로 파일이나 메세지를 복호화합니다. |
+| Encrypt pub | Encrypts files or messages using a public key. | 공개키 기반으로 파일이나 메세지를 암호화합니다. |
+| Decrypt pub | Decrypts files or messages using a public key. | 공개키 기반으로 파일이나 메세지를 복호화합니다. |
+| Contacts | Manages IP shortcuts, public key address books, and account key files. | IP 바로가기, 공개키 주소록, 계정 키 파일을 관리합니다. |
+| Account | Manages account key pairs or allows for password resets. | 계정의 키 쌍을 관리하거나 비빌번호를 재설정 할 수 있습니다. |
+| Extend | Extends the login session. | 로그인 세션을 연장합니다. |
+| Logout | Terminates the login session. | 로그인 세션을 종료합니다. |
+
+- config.json은 암호화되지 않으며 자동 세션 만료, 공개키 정보, 계정 파일 경로 등을 보관합니다. config.json is not encrypted and stores session expiration settings, public key info, and account file paths.
+- 계정 파일은 Opsec 형식으로 암호화되며 내부에 공개키/개인키 쌍과 키 파일을 보관할 수 있습니다. Account files are encrypted in Opsec format and can store public/private key pairs and key files.
+- 공개키는 변조되지 않는 채널로 공유한다면 노출되어도 괜찮지만, 개인키는 절대 유출되어선 안 됩니다. While public keys can be shared (provided the channel is secure), private keys must never be exposed.
+- 더 안전한 보호를 위해 키 파일의 데이터는 AFT 볼트 안에만 보관하고 TP1 통신으로 받아올 수도 있습니다. For maximum security, store key file data exclusively within AFT vaults and transfer them only via TP1 communication.
+
 ## Build Executable
 
 This application uses Go programming language. [Install Go](https://go.dev/) to build yourself, or download pre-built release binary. It takes few minutes to download and build GUI version.

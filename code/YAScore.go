@@ -50,6 +50,17 @@ func GetPrehead(tp string, img string, ismsg bool) []byte {
 	return append(ico, make([]byte, 128-len(ico)%128)...)
 }
 
+// retrying delete
+func Remove2(path string) {
+	for {
+		os.Remove(path)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(time.Millisecond * 100)
+	}
+}
+
 // password complex
 type PwCplx struct {
 	AlgoType string // pbk1, arg1
@@ -111,7 +122,7 @@ func Send(srcs []string, smsg string, addr string, pmode string, pg ProgStatus) 
 	// 1. pack targets (zip1)
 	pg.OnStart()
 	zipPath := TempPath()
-	defer os.Remove(zipPath)
+	defer Remove2(zipPath)
 	if len(srcs) == 0 {
 		os.WriteFile(zipPath, nil, 0644)
 	} else {
@@ -218,7 +229,7 @@ func Receive(dst string, port string, pg ProgStatus) ([]byte, []byte, string, er
 	tp.Init(0, false, sock.Conn) // listener does not set mode
 	pg.OnUpdate(0.1)             // connecting is 10%
 	zipPath := TempPath()
-	defer os.Remove(zipPath)
+	defer Remove2(zipPath)
 	f, err := os.Create(zipPath)
 	if err != nil {
 		pg.OnError(err)
@@ -334,7 +345,7 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 	// 1. pack files
 	pg.OnStart()
 	zipPath := TempPath()
-	defer os.Remove(zipPath)
+	defer Remove2(zipPath)
 	var err error
 	switch cfg.PackType {
 	case "zip1":
@@ -440,7 +451,7 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 }
 
 // decrypt file to dir
-func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCplx, pg ProgStatus) (string, string, error) {
+func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) (string, string, error) {
 	// 1. read header
 	pg.OnStart()
 	f, err := os.Open(src)
@@ -474,7 +485,7 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCplx, p
 
 	// 3. prepare worker
 	zipPath := TempPath()
-	defer os.Remove(zipPath)
+	defer Remove2(zipPath)
 	zf, err := os.Create(zipPath)
 	if err != nil {
 		pg.OnError(err)

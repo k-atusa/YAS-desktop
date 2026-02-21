@@ -436,7 +436,7 @@ func f_dec() error {
 	if len(Cfg.Files) == 0 && Cfg.Text == "" {
 		return errors.New("input source required (file or -t)")
 	}
-	pwc, pubc, ec := Cfg.ToPwCplx(), Cfg.ToPubCplx(), Cfg.ToEncCplx()
+	pwc, pubc := Cfg.ToPwCplx(), Cfg.ToPubCplx()
 	if Cfg.Private == nil {
 		pubc = nil
 	} else {
@@ -460,7 +460,7 @@ func f_dec() error {
 		msg, smsg, err = DecMsg(data, pwc, pubc, new(Progress))
 	} else { // file mode
 		fmt.Print("Decrypting: ")
-		msg, smsg, err = DecFile(Cfg.Files[0], dst, pwc, pubc, ec, new(Progress))
+		msg, smsg, err = DecFile(Cfg.Files[0], dst, pwc, pubc, new(Progress))
 	}
 
 	if msg != "" {

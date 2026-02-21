@@ -1,4 +1,4 @@
-# YAS-desktop v0.1.0
+# YAS-desktop v1.0.0
 
 project USAG: Yet Another Security desktop version
 

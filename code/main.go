@@ -310,7 +310,7 @@ func (l *LoginPage) Fill() {
 
 	// group1: keyfile selection
 	lbl1 := widget.NewLabel("[0B 00000000] keyfile not selected")
-	btn1a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(l.Window, lbl1, &l.AccKF) })
+	btn1a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl1, &l.AccKF) })
 	ent1 := widget.NewEntry()
 	ent1.SetPlaceHolder("port: 8001")
 	btn1b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(l.Window, lbl1, ent1, &l.AccKF) })
@@ -585,8 +585,8 @@ func (p *Page0) Fill() {
 	p.list.OnSelected = func(id widget.ListItemID) { p.selected = id }
 
 	// group1: file management buttons
-	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.Window, p.list, &p.Targets) })
-	btn1b := widget.NewButtonWithIcon("Add folder", theme.FolderIcon(), func() { ListAddFolder(p.Window, p.list, &p.Targets) })
+	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.list, &p.Targets) })
+	btn1b := widget.NewButtonWithIcon("Add folder", theme.FolderIcon(), func() { ListAddFolder(p.list, &p.Targets) })
 	btn1c := widget.NewButtonWithIcon("Del path", theme.DeleteIcon(), func() { ListDelTgt(p.list, &p.Targets, p.selected); p.selected = -1 })
 	btn1d := widget.NewButtonWithIcon("Reset all", theme.ContentClearIcon(), func() { ListDelTgt(p.list, &p.Targets, len(p.Targets)); p.selected = -1 })
 	box1a := container.NewHBox(btn1a, btn1b, btn1c, btn1d)
@@ -738,16 +738,14 @@ func (p *Page1) Fill() {
 		lbl0.SetText(p.Target)
 	}
 	btn0 := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() {
-		dialog.ShowFileOpen(func(r fyne.URIReadCloser, err error) {
-			if err == nil && r != nil {
-				defer r.Close()
-				p.Target = r.URI().Path()
-				lbl0.SetText(p.Target)
-			} else {
-				p.Target = ""
-				lbl0.SetText("No file selected")
-			}
-		}, p.Window)
+		path, err := ZenityFile("")
+		if err == nil {
+			p.Target = path
+			lbl0.SetText(p.Target)
+		} else {
+			p.Target = ""
+			lbl0.SetText("No file selected")
+		}
 	})
 	box0 := container.NewHBox(widget.NewLabel("Sign target:"), btn0, lbl0)
 
@@ -765,21 +763,25 @@ func (p *Page1) Fill() {
 		}
 	})
 	btn1b := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() {
-		dialog.ShowFileOpen(func(r fyne.URIReadCloser, err error) {
-			if err == nil && r != nil {
-				defer r.Close()
-				data, err := io.ReadAll(r)
-				if err != nil {
-					dialog.ShowError(err, p.Window)
-				} else if len(data) > int(p.Config.Limit) {
-					dialog.ShowInformation("Error", "Signature data is too large", p.Window)
-				} else {
-					p.SignData = string(data)
-					p.signview.SetText(p.SignData)
-					dialog.ShowInformation("Success", "Signature data loaded", p.Window)
-				}
+		path, err := ZenityFile("")
+		if err == nil {
+			var stat os.FileInfo
+			stat, err = os.Stat(path)
+			if err == nil && stat.Size() > p.Config.Limit {
+				err = errors.New("Signature data is too large")
 			}
-		}, p.Window)
+		}
+		var data []byte
+		if err == nil {
+			data, err = os.ReadFile(path)
+		}
+		if err != nil {
+			dialog.ShowError(err, p.Window)
+			return
+		}
+		p.SignData = string(data)
+		p.signview.SetText(p.SignData)
+		dialog.ShowInformation("Success", "Signature data loaded", p.Window)
 	})
 	btn1c := widget.NewButtonWithIcon("Fetch", theme.ContentPasteIcon(), func() {
 		p.SignData = p.signview.Text
@@ -792,7 +794,7 @@ func (p *Page1) Fill() {
 	lbl2 := widget.NewLabel(fmt.Sprintf("[%dB %s] default", len(p.KeyData), Opsec.Crc32(p.KeyData)))
 	sel2 := widget.NewSelect(p.Config.GetPub(), func(s string) { ChooseKF(lbl2, &p.KeyData, s, p.Config.PublicKeys) })
 	sel2.PlaceHolder = "Select from Contacts"
-	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(p.Window, lbl2, &p.KeyData, p.Account.PriKey) })
+	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl2, &p.KeyData, p.Account.PriKey) })
 	ent2 := widget.NewEntry()
 	ent2.SetPlaceHolder("port: 8001")
 	btn2b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl2, ent2, &p.KeyData) })
@@ -983,8 +985,8 @@ func (p *Page2) Fill() {
 	}
 
 	// group1: file management buttons
-	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.Window, p.list, &p.Targets) })
-	btn1b := widget.NewButtonWithIcon("Add folder", theme.FolderIcon(), func() { ListAddFolder(p.Window, p.list, &p.Targets) })
+	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.list, &p.Targets) })
+	btn1b := widget.NewButtonWithIcon("Add folder", theme.FolderIcon(), func() { ListAddFolder(p.list, &p.Targets) })
 	btn1c := widget.NewButtonWithIcon("Del path", theme.DeleteIcon(), func() { ListDelTgt(p.list, &p.Targets, p.selected); p.selected = -1 })
 	btn1d := widget.NewButtonWithIcon("Reset all", theme.ContentClearIcon(), func() { ListDelTgt(p.list, &p.Targets, len(p.Targets)); p.selected = -1 })
 	box1a := container.NewHBox(btn1a, btn1b, btn1c, btn1d)
@@ -1224,8 +1226,8 @@ func (p *Page4) Fill() {
 	)
 	p.selected = -1
 	p.list.OnSelected = func(id widget.ListItemID) { p.selected = id }
-	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.Window, p.list, &p.Targets) })
-	btn1b := widget.NewButtonWithIcon("Add dir", theme.FolderIcon(), func() { ListAddFolder(p.Window, p.list, &p.Targets) })
+	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.list, &p.Targets) })
+	btn1b := widget.NewButtonWithIcon("Add dir", theme.FolderIcon(), func() { ListAddFolder(p.list, &p.Targets) })
 	btn1c := widget.NewButtonWithIcon("Del path", theme.DeleteIcon(), func() { ListDelTgt(p.list, &p.Targets, p.selected); p.selected = -1 })
 	btn1d := widget.NewButtonWithIcon("Del all", theme.ContentClearIcon(), func() { ListDelTgt(p.list, &p.Targets, len(p.Targets)); p.selected = -1 })
 	box1 := container.NewBorder(box0, container.NewHBox(btn1a, btn1b, btn1c, btn1d), nil, nil, p.list)
@@ -1263,7 +1265,7 @@ func (p *Page4) Fill() {
 	lbl4 := widget.NewLabel("[0B 00000000] keyfile not selected")
 	sel4 := widget.NewSelect(p.Account.GetList(), func(s string) { ChooseKF(lbl4, &p.kf, s, p.Account.KeyFiles) })
 	sel4.PlaceHolder = "Select from Account"
-	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(p.Window, lbl4, &p.kf) })
+	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl4, &p.kf) })
 	ent4 := widget.NewEntry()
 	ent4.SetPlaceHolder("port: 8001")
 	btn4b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(p.Window, lbl4, ent4, &p.kf) })
@@ -1406,8 +1408,8 @@ func (p *Page5) Fill() {
 		p.selected = id
 		p.msgView.SetText("Msg: " + p.View())
 	}
-	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.Window, p.list, &p.Targets) })
-	btn1b := widget.NewButtonWithIcon("Add dir", theme.FolderIcon(), func() { ListAddFolder(p.Window, p.list, &p.Targets) })
+	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.list, &p.Targets) })
+	btn1b := widget.NewButtonWithIcon("Add dir", theme.FolderIcon(), func() { ListAddFolder(p.list, &p.Targets) })
 	btn1c := widget.NewButtonWithIcon("Del path", theme.DeleteIcon(), func() { ListDelTgt(p.list, &p.Targets, p.selected); p.selected = -1 })
 	btn1d := widget.NewButtonWithIcon("Del all", theme.ContentClearIcon(), func() { ListDelTgt(p.list, &p.Targets, len(p.Targets)); p.selected = -1 })
 	box1 := container.NewBorder(box0, container.NewHBox(btn1a, btn1b, btn1c, btn1d), nil, nil, p.list)
@@ -1425,7 +1427,7 @@ func (p *Page5) Fill() {
 	lbl4 := widget.NewLabel("[0B 00000000] keyfile not selected")
 	sel4 := widget.NewSelect(p.Account.GetList(), func(s string) { ChooseKF(lbl4, &p.kf, s, p.Account.KeyFiles) })
 	sel4.PlaceHolder = "Select from Account"
-	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(p.Window, lbl4, &p.kf) })
+	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl4, &p.kf) })
 	ent4 := widget.NewEntry()
 	ent4.SetPlaceHolder("port: 8001")
 	btn4b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(p.Window, lbl4, ent4, &p.kf) })
@@ -1579,8 +1581,8 @@ func (p *Page6) Fill() {
 	)
 	p.selected = -1
 	p.list.OnSelected = func(id widget.ListItemID) { p.selected = id }
-	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.Window, p.list, &p.Targets) })
-	btn1b := widget.NewButtonWithIcon("Add dir", theme.FolderIcon(), func() { ListAddFolder(p.Window, p.list, &p.Targets) })
+	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.list, &p.Targets) })
+	btn1b := widget.NewButtonWithIcon("Add dir", theme.FolderIcon(), func() { ListAddFolder(p.list, &p.Targets) })
 	btn1c := widget.NewButtonWithIcon("Del path", theme.DeleteIcon(), func() { ListDelTgt(p.list, &p.Targets, p.selected); p.selected = -1 })
 	btn1d := widget.NewButtonWithIcon("Del all", theme.ContentClearIcon(), func() { ListDelTgt(p.list, &p.Targets, len(p.Targets)); p.selected = -1 })
 	box1 := container.NewBorder(box0, container.NewHBox(btn1a, btn1b, btn1c, btn1d), nil, nil, p.list)
@@ -1611,7 +1613,7 @@ func (p *Page6) Fill() {
 	lbl4 := widget.NewLabel("[0B 00000000] default")
 	sel4 := widget.NewSelect(p.Config.GetPub(), func(s string) { ChooseKF(lbl4, &p.pub, s, p.Config.PublicKeys) })
 	sel4.PlaceHolder = "Select from Contacts"
-	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(p.Window, lbl4, &p.pub, nil) })
+	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl4, &p.pub, nil) })
 	ent4 := widget.NewEntry()
 	ent4.SetPlaceHolder("port: 8001")
 	btn4b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl4, ent4, &p.pub) })
@@ -1625,7 +1627,7 @@ func (p *Page6) Fill() {
 	p.pri = p.Account.PriKey
 	lbl5 := widget.NewLabel(fmt.Sprintf("[%dB %s] default", len(p.pri), Opsec.Crc32(p.pri)))
 	btn5a := widget.NewButtonWithIcon("Clear", theme.ContentRemoveIcon(), func() { p.pri = nil; lbl5.SetText("[0B 00000000] null") })
-	btn5b := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(p.Window, lbl5, &p.pri, p.Account.PriKey) })
+	btn5b := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl5, &p.pri, p.Account.PriKey) })
 	ent5 := widget.NewEntry()
 	ent5.SetPlaceHolder("port: 8001")
 	btn5c := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl5, ent5, &p.pri) })
@@ -1754,8 +1756,8 @@ func (p *Page7) Fill() {
 		p.selected = id
 		p.msgView.SetText("Msg: " + p.View())
 	}
-	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.Window, p.list, &p.Targets) })
-	btn1b := widget.NewButtonWithIcon("Add dir", theme.FolderIcon(), func() { ListAddFolder(p.Window, p.list, &p.Targets) })
+	btn1a := widget.NewButtonWithIcon("Add file", theme.FileIcon(), func() { ListAddFile(p.list, &p.Targets) })
+	btn1b := widget.NewButtonWithIcon("Add dir", theme.FolderIcon(), func() { ListAddFolder(p.list, &p.Targets) })
 	btn1c := widget.NewButtonWithIcon("Del path", theme.DeleteIcon(), func() { ListDelTgt(p.list, &p.Targets, p.selected); p.selected = -1 })
 	btn1d := widget.NewButtonWithIcon("Del all", theme.ContentClearIcon(), func() { ListDelTgt(p.list, &p.Targets, len(p.Targets)); p.selected = -1 })
 	box1 := container.NewBorder(box0, container.NewHBox(btn1a, btn1b, btn1c, btn1d), nil, nil, p.list)
@@ -1773,7 +1775,7 @@ func (p *Page7) Fill() {
 	lbl4 := widget.NewLabel("[0B 00000000] default")
 	sel4 := widget.NewSelect(p.Config.GetPub(), func(s string) { ChooseKF(lbl4, &p.pub, s, p.Config.PublicKeys) })
 	sel4.PlaceHolder = "Select from Contacts"
-	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(p.Window, lbl4, &p.pub, nil) })
+	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl4, &p.pub, nil) })
 	ent4 := widget.NewEntry()
 	ent4.SetPlaceHolder("port: 8001")
 	btn4b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl4, ent4, &p.pub) })
@@ -1787,7 +1789,7 @@ func (p *Page7) Fill() {
 	p.pri = p.Account.PriKey
 	lbl5 := widget.NewLabel(fmt.Sprintf("[%dB %s] default", len(p.pri), Opsec.Crc32(p.pri)))
 	btn5a := widget.NewButtonWithIcon("Clear", theme.ContentRemoveIcon(), func() { p.pri = nil; lbl5.SetText("[0B 00000000] null") })
-	btn5b := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(p.Window, lbl5, &p.pri, p.Account.PriKey) })
+	btn5b := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl5, &p.pri, p.Account.PriKey) })
 	ent5 := widget.NewEntry()
 	ent5.SetPlaceHolder("port: 8001")
 	btn5c := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl5, ent5, &p.pri) })
@@ -2014,7 +2016,7 @@ func (p *Page8) Fill() {
 
 	// group2: add keyfile
 	lbl2 := widget.NewLabel("[0B 00000000] keyfile not selected")
-	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(p.Window, lbl2, &p.kf) })
+	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl2, &p.kf) })
 	ent2a := widget.NewEntry()
 	ent2a.SetPlaceHolder("port: 8001")
 	btn2b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(p.Window, lbl2, ent2a, &p.kf) })
@@ -2154,7 +2156,7 @@ func (p *Page9) Fill() {
 
 	// group2: keyfile selection
 	lbl2 := widget.NewLabel("[0B 00000000] keyfile not selected")
-	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(p.Window, lbl2, &p.kf) })
+	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl2, &p.kf) })
 	ent2 := widget.NewEntry()
 	ent2.SetPlaceHolder("port: 8001")
 	btn2b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(p.Window, lbl2, ent2, &p.kf) })

@@ -15,7 +15,7 @@ import (
 	"github.com/k-atusa/USAG-Lib/Szip"
 )
 
-var YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.0.0"
+var YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.1.0"
 
 // abstract status indicator
 type ProgStatus interface {

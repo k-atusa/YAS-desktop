@@ -19,15 +19,16 @@ type Config struct {
 	Mode      string          // pack unpack send recv genkey sign enc dec
 	Output    string          // output path
 	Files     []string        // target files
-	Text      string          // target text or address
-	TypeWords map[string]bool // keyword: webp png bin, zip1 tar1, gcm1 gcmx1, pbk1 arg1, rsa1-2k rsa1-3k rsa1-4k ecc1
+	Text      string          // target text or address/secret
+	TypeWords map[string]bool // keyword: webp png bin, zip1 tar1, gcm1 gcmx1, sha3 pbk2 arg2, rsa1 rsa2 ecc1 pqc1
 
-	PW      string // password
-	KF      []byte // keyfile
-	Public  []byte // public key
-	Private []byte // private key
-	Msg     string // plaintext message
-	SMsg    string // secure message
+	PW        string // password
+	KF        []byte //
+	Public    []byte // public key
+	MyPublic  []byte // my public key
+	MyPrivate []byte // my private key
+	Msg       string // plaintext message
+	SMsg      string // secure message
 }
 
 func (cfg *Config) Init() {
@@ -40,7 +41,7 @@ func (cfg *Config) Init() {
 	fs.StringVar(&cfg.Text, "t", "", "set text input")
 
 	// keywords
-	magics := []string{"webp", "png", "bin", "zip1", "tar1", "gcm1", "gcmx1", "pbk1", "arg1", "rsa1-2k", "rsa1-3k", "rsa1-4k", "ecc1"}
+	magics := []string{"webp", "png", "bin", "zip1", "tar1", "gcm1", "gcmx1", "sha3", "pbk2", "arg2", "rsa1", "rsa2", "ecc1", "pqc1"}
 	mflags := make([]bool, len(magics))
 	for i, r := range magics {
 		fs.BoolVar(&mflags[i], r, false, "keyword: "+r)
@@ -56,9 +57,10 @@ func (cfg *Config) Init() {
 	fs.StringVar(&kfpath, "kf", "", "key file path")
 
 	// get public & private key
-	pub, pri := "", ""
-	fs.StringVar(&pub, "pub", "", "public key string or path")
-	fs.StringVar(&pri, "pri", "", "private key string or path")
+	pub, mypub, mypri := "", "", ""
+	fs.StringVar(&pub, "pub", "", "peer public key string or path")
+	fs.StringVar(&mypub, "mypub", "", "my public key string or path")
+	fs.StringVar(&mypri, "mypri", "", "my private key string or path")
 
 	// parse and get target files
 	fs.Parse(os.Args[1:])
@@ -101,7 +103,13 @@ func (cfg *Config) Init() {
 		if s == "" {
 			return nil
 		}
-		d, err := Bencode.Decode(s)
+		var d []byte
+		var err error
+		if strings.Contains(s, "#") {
+			d, err = Bencode.Decode64(s, "#")
+		} else {
+			d, err = Bencode.Decode64(s, "")
+		}
 		if err == nil {
 			return d
 		} else {
@@ -109,29 +117,35 @@ func (cfg *Config) Init() {
 			return nil
 		}
 	}
-	cfg.Public, cfg.Private = preader(pub), preader(pri)
+	cfg.Public, cfg.MyPublic, cfg.MyPrivate = preader(pub), preader(mypub), preader(mypri)
 }
 
 func (cfg *Config) ToPwCplx() *PwCplx {
 	c := &PwCplx{PW: cfg.PW, KF: cfg.KF}
-	c.AlgoType = "arg1" // default
+	c.AlgoType = "arg2" // default
 	switch {
-	case cfg.TypeWords["arg1"]:
-		c.AlgoType = "arg1"
-	case cfg.TypeWords["pbk1"]:
-		c.AlgoType = "pbk1"
+	case cfg.TypeWords["arg2"]:
+		c.AlgoType = "arg2"
+	case cfg.TypeWords["pbk2"]:
+		c.AlgoType = "pbk2"
+	case cfg.TypeWords["sha3"]:
+		c.AlgoType = "sha3"
 	}
 	return c
 }
 
 func (cfg *Config) ToPubCplx() *PubCplx {
-	c := &PubCplx{Pub: cfg.Public, Pri: cfg.Private}
-	c.AlgoType = "ecc1" // default
+	c := &PubCplx{PeerPub: cfg.Public, MyPub: cfg.MyPublic, MyPri: cfg.MyPrivate}
+	c.AlgoType = "pqc1" // default
 	switch {
+	case cfg.TypeWords["pqc1"]:
+		c.AlgoType = "pqc1"
 	case cfg.TypeWords["ecc1"]:
 		c.AlgoType = "ecc1"
-	case cfg.TypeWords["rsa1-2k"], cfg.TypeWords["rsa1-3k"], cfg.TypeWords["rsa1-4k"]:
+	case cfg.TypeWords["rsa1"]:
 		c.AlgoType = "rsa1"
+	case cfg.TypeWords["rsa2"]:
+		c.AlgoType = "rsa2"
 	}
 	return c
 }
@@ -231,30 +245,42 @@ func f_unpack() error {
 }
 
 func f_send() error {
-	addr := Cfg.Text
-	if addr == "" {
-		addr = "127.0.0.1"
+	addr, secret := "127.0.0.1", ""
+	if Cfg.Text != "" {
+		parts := strings.Split(Cfg.Text, "/")
+		if parts[0] != "" {
+			addr = parts[0]
+		}
+		if len(parts) > 1 {
+			secret = parts[1]
+		}
 	}
 	if !strings.Contains(addr, ":") {
 		addr += ":8002" // default port
 	}
 	fmt.Print("Sending: ")
-	fromPub, toPub, err := Send(Cfg.Files, Cfg.SMsg, addr, Cfg.ToPubCplx().AlgoType, new(Progress))
+	fromPub, toPub, err := Send(Cfg.Files, Cfg.SMsg, addr, secret, Cfg.ToPwCplx().AlgoType, Cfg.ToPubCplx().AlgoType, new(Progress))
 	fmt.Printf("[transfer] from %s to %s\n", Opsec.Crc32(fromPub), Opsec.Crc32(toPub))
 	return err
 }
 
 func f_recv() error {
-	port := Cfg.Text
-	if port == "" {
-		port = "8002" // default port
+	port, secret := "8002", ""
+	if Cfg.Text != "" {
+		parts := strings.Split(Cfg.Text, "/")
+		if parts[0] != "" {
+			port = parts[0]
+		}
+		if len(parts) > 1 {
+			secret = parts[1]
+		}
 	}
 	dst := Cfg.Output
 	if dst == "" {
 		dst = "./"
 	}
 	fmt.Print("Receiving: ")
-	fromPub, toPub, smsg, err := Receive(dst, port, new(Progress))
+	fromPub, toPub, smsg, err := Receive(dst, port, secret, new(Progress))
 	fmt.Printf("[transfer] from %s to %s\n", Opsec.Crc32(fromPub), Opsec.Crc32(toPub))
 	if smsg != "" {
 		fmt.Printf("\n[smsg] %s\n", smsg)
@@ -263,35 +289,41 @@ func f_recv() error {
 }
 
 func f_genkey() error {
-	pubNm, priNm := "", ""
-	var pub, pri []byte
+	pubNm, priNm, algo := "", "", ""
+	var pub, pri string
 	var err error
 	switch {
-	case Cfg.TypeWords["rsa1-2k"]:
-		rsa := new(Bencrypt.RSA1)
-		pubNm, priNm = "public_2k.txt", "private_2k.txt"
-		pub, pri, err = rsa.Genkey(2048)
-	case Cfg.TypeWords["rsa1-3k"]:
-		rsa := new(Bencrypt.RSA1)
-		pubNm, priNm = "public_3k.txt", "private_3k.txt"
-		pub, pri, err = rsa.Genkey(3072)
-	case Cfg.TypeWords["rsa1-4k"]:
-		rsa := new(Bencrypt.RSA1)
-		pubNm, priNm = "public_4k.txt", "private_4k.txt"
-		pub, pri, err = rsa.Genkey(4096)
-	default: // default ecc1
-		ecc := new(Bencrypt.ECC1)
-		pubNm, priNm = "public.txt", "private.txt"
-		pub, pri, err = ecc.Genkey()
+	case Cfg.TypeWords["rsa1"]:
+		pubNm, priNm, algo = "public_rsa1.txt", "private_rsa1.txt", "rsa1"
+	case Cfg.TypeWords["rsa2"]:
+		pubNm, priNm, algo = "public_rsa2.txt", "private_rsa2.txt", "rsa2"
+	case Cfg.TypeWords["ecc1"]:
+		pubNm, priNm, algo = "public_ecc1.txt", "private_ecc1.txt", "ecc1"
+	case Cfg.TypeWords["pqc1"]:
+		pubNm, priNm, algo = "public_pqc1.txt", "private_pqc1.txt", "pqc1"
+	default: // default pqc1
+		pubNm, priNm, algo = "public_pqc1.txt", "private_pqc1.txt", "pqc1"
+	}
+	am := new(Bencrypt.AsymMaster)
+	err = am.Init(algo)
+	if err == nil {
+		var bpub, bpri []byte
+		bpub, bpri, err = am.Genkey()
+		if err == nil {
+			pub, err = Bencode.Encode64(bpub, "#", 80, 10)
+		}
+		if err == nil {
+			pri, err = Bencode.Encode64(bpri, "#", 80, 10)
+		}
 	}
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(pubNm, []byte(Bencode.Encode(pub)), 0644); err != nil {
+	if err := os.WriteFile(pubNm, []byte(pub), 0644); err != nil {
 		return err
 	}
 	fmt.Printf("Public key: %s\n", pubNm)
-	if err := os.WriteFile(priNm, []byte(Bencode.Encode(pri)), 0644); err != nil {
+	if err := os.WriteFile(priNm, []byte(pri), 0644); err != nil {
 		return err
 	}
 	fmt.Printf("Private key: %s\n", priNm)
@@ -300,7 +332,7 @@ func f_genkey() error {
 
 func f_sign() error {
 	// make sign
-	if Cfg.Private != nil {
+	if Cfg.MyPrivate != nil {
 		if len(Cfg.Files) == 0 {
 			return errors.New("no file to sign")
 		}
@@ -312,7 +344,7 @@ func f_sign() error {
 		if err := am.Init(Cfg.ToPubCplx().AlgoType); err != nil {
 			return err
 		}
-		if err := am.Loadkey(nil, Cfg.Private); err != nil {
+		if err := am.Loadkey(nil, Cfg.MyPrivate); err != nil {
 			return err
 		}
 		fmt.Println("Private key loaded")
@@ -333,11 +365,15 @@ func f_sign() error {
 			if err != nil {
 				return err
 			}
-			sdata, err := am.Sign(data)
+			sdata := ""
+			sgn, err := am.Sign(data)
+			if err == nil {
+				sdata, err = Bencode.Encode64(sgn, "#", 80, 10)
+			}
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(signPath, []byte(Bencode.Encode(sdata)), 0644); err != nil {
+			if err := os.WriteFile(signPath, []byte(sdata), 0644); err != nil {
 				return err
 			}
 			fmt.Printf("Signed %s -> %s\n", f, signPath)
@@ -346,7 +382,7 @@ func f_sign() error {
 	}
 
 	// verify sign
-	if Cfg.Public != nil {
+	if Cfg.Public != nil || Cfg.MyPublic != nil {
 		if len(Cfg.Files) < 2 {
 			return errors.New("need 2 files (file, sign)")
 		}
@@ -368,7 +404,12 @@ func f_sign() error {
 		if err != nil {
 			return err
 		}
-		sdata, err := Bencode.Decode(string(sdataRaw))
+		var sdata []byte
+		if strings.Contains(string(sdataRaw), "#") {
+			sdata, err = Bencode.Decode64(string(sdataRaw), "#")
+		} else {
+			sdata, err = Bencode.Decode64(string(sdataRaw), "")
+		}
 		if err != nil {
 			return err
 		}
@@ -378,7 +419,11 @@ func f_sign() error {
 		if err := am.Init(Cfg.ToPubCplx().AlgoType); err != nil {
 			return err
 		}
-		if err := am.Loadkey(Cfg.Public, nil); err != nil {
+		pub := Cfg.Public
+		if pub == nil {
+			pub = Cfg.MyPublic
+		}
+		if err := am.Loadkey(pub, nil); err != nil {
 			return err
 		}
 		fmt.Println("Public key loaded")
@@ -416,11 +461,23 @@ func f_enc() error {
 
 	// msg-only mode
 	if len(Cfg.Files) == 0 {
-		enc, err := EncMsg(pwc, pubc, ec, new(Progress))
+		enc := ""
+		benc, err := EncMsg(pwc, pubc, ec, new(Progress))
+		if err == nil {
+			enc, err = Bencode.Encode64(benc, "#", 80, 10)
+		}
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Encrypted successfully:\n\n%s\n\n", Bencode.Encode(enc))
+
+		if len(enc) > 4096 { // save to file
+			if err := os.WriteFile(dst+".txt", []byte(enc), 0644); err != nil {
+				return err
+			}
+			fmt.Printf("Encrypted successfully: %s\n", dst+".txt")
+		} else { // direct print
+			fmt.Printf("Encrypted successfully:\n\n%s\n\n", enc)
+		}
 		return nil
 	}
 
@@ -437,7 +494,7 @@ func f_dec() error {
 		return errors.New("input source required (file or -t)")
 	}
 	pwc, pubc := Cfg.ToPwCplx(), Cfg.ToPubCplx()
-	if Cfg.Private == nil {
+	if Cfg.MyPrivate == nil {
 		pubc = nil
 	} else {
 		pwc = nil
@@ -451,7 +508,11 @@ func f_dec() error {
 	var err error
 
 	if len(Cfg.Files) == 0 { // msg-only mode
-		data, err = Bencode.Decode(Cfg.Text)
+		if strings.Contains(Cfg.Text, "#") {
+			data, err = Bencode.Decode64(Cfg.Text, "#")
+		} else {
+			data, err = Bencode.Decode64(Cfg.Text, "")
+		}
 		if err != nil {
 			return err
 		}
@@ -508,9 +569,9 @@ func main() {
 	default: // help
 		fmt.Println(YAS_VERSION)
 		fmt.Println("-m mode [pack unpack send recv genkey sign enc dec]")
-		fmt.Println("-o outputDir/Path, -t text/ip:port, -msg message, -smsg securedMessage")
+		fmt.Println("-o outputDir|Path, -t text|ip:port/secret, -msg message, -smsg securedMessage")
 		fmt.Println("-pw password, -kf keyFile, -pub publicKey, -pri privateKey")
-		fmt.Println("options: [webp png] [tar1 zip1] [gcmx1 gcm1] [arg1 pbk1] [ecc1 rsa1-2k rsa1-3k rsa1-4k]")
+		fmt.Println("options: [webp png bin] [tar1 zip1] [gcmx1 gcm1] [sha3 pbk2 arg2] [rsa1 rsa2 ecc1 pqc1]")
 	}
 	if err != nil {
 		fmt.Printf("\n[ERROR] %v\n", err)

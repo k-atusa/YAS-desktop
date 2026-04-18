@@ -15,7 +15,7 @@ import (
 	"github.com/k-atusa/USAG-Lib/Szip"
 )
 
-var YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.1.0"
+var YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.2.0"
 
 // abstract status indicator
 type ProgStatus interface {
@@ -50,29 +50,19 @@ func GetPrehead(tp string, img string, ismsg bool) []byte {
 	return append(ico, make([]byte, 128-len(ico)%128)...)
 }
 
-// retrying delete
-func Remove2(path string) {
-	for {
-		os.Remove(path)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			break
-		}
-		time.Sleep(time.Millisecond * 100)
-	}
-}
-
 // password complex
 type PwCplx struct {
-	AlgoType string // pbk1, arg1
+	AlgoType string // sha3, pbk2, arg2
 	PW       string
 	KF       []byte
 }
 
 // public key complex
 type PubCplx struct {
-	AlgoType string // rsa1, ecc1
-	Pub      []byte
-	Pri      []byte
+	AlgoType string // rsa1, rsa2, ecc1, pqc1
+	PeerPub  []byte
+	MyPub    []byte
+	MyPri    []byte
 }
 
 // encryption config complex
@@ -117,12 +107,12 @@ func Unpack(src string, dst string, tp string) error {
 	}
 }
 
-// send targets (fromPub, toPub), keyword: rsa1, ecc1, fixed: zip1, gcmx1
-func Send(srcs []string, smsg string, addr string, pmode string, pg ProgStatus) ([]byte, []byte, error) {
+// send targets (fromPub, toPub), keyword: sha3, pbk2, arg2, rsa1, rsa2, ecc1, pqc1, fixed: zip1, gcmx1
+func Send(srcs []string, smsg string, addr string, secret string, hmode string, pmode string, pg ProgStatus) ([]byte, []byte, error) {
 	// 1. pack targets (zip1)
 	pg.OnStart()
 	zipPath := TempPath()
-	defer Remove2(zipPath)
+	defer DelPath(zipPath)
 	if len(srcs) == 0 {
 		os.WriteFile(zipPath, nil, 0644)
 	} else {
@@ -144,21 +134,29 @@ func Send(srcs []string, smsg string, addr string, pmode string, pg ProgStatus) 
 
 	// 3. accept connection
 	tp := new(TP1)
-	var con uint16 = MODE_GCMX1
+	var con uint16 = SYM_GCMX1
 	if len(srcs) == 0 {
-		con |= MODE_MSGONLY
+		con += MODE_MSGONLY
+	}
+	switch hmode {
+	case "sha3":
+		con += HASH_SHA3
+	case "pbk2":
+		con += HASH_PBK2
+	case "arg2":
+		con += HASH_ARG2
 	}
 	switch pmode {
-	case "rsa1", "rsa1-2k":
-		con |= MODE_RSA1_2K
-	case "rsa1-3k":
-		con |= MODE_RSA1_3K
-	case "rsa1-4k":
-		con |= MODE_RSA1_4K
+	case "rsa1":
+		con += ASYM_RSA1
+	case "rsa2":
+		con += ASYM_RSA2
 	case "ecc1":
-		con |= MODE_ECC1
+		con += ASYM_ECC1
+	case "pqc1":
+		con += ASYM_PQC1
 	}
-	tp.Init(con, false, sock.Conn)
+	tp.Init(con, false, secret, sock.Conn)
 	pg.OnUpdate(0.2) // connecting is 10%
 
 	// 4. open packed file
@@ -213,7 +211,7 @@ func Send(srcs []string, smsg string, addr string, pmode string, pg ProgStatus) 
 }
 
 // receive targets (fromPub, toPub), fixed: zip1, gcmx1
-func Receive(dst string, port string, pg ProgStatus) ([]byte, []byte, string, error) {
+func Receive(dst string, port string, secret string, pg ProgStatus) ([]byte, []byte, string, error) {
 	// 1. make connection
 	pg.OnStart()
 	sock := new(TCPsocket)
@@ -226,10 +224,10 @@ func Receive(dst string, port string, pg ProgStatus) ([]byte, []byte, string, er
 
 	// 2. accept connection, set temp path
 	tp := new(TP1)
-	tp.Init(0, false, sock.Conn) // listener does not set mode
-	pg.OnUpdate(0.1)             // connecting is 10%
+	tp.Init(0, false, secret, sock.Conn) // listener does not set mode
+	pg.OnUpdate(0.1)                     // connecting is 10%
 	zipPath := TempPath()
-	defer Remove2(zipPath)
+	defer DelPath(zipPath)
 	f, err := os.Create(zipPath)
 	if err != nil {
 		pg.OnError(err)
@@ -295,7 +293,7 @@ func EncMsg(pwc *PwCplx, pubc *PubCplx, cfg *EncCplx, pg ProgStatus) ([]byte, er
 	if pwc != nil {
 		header, err = ops.Encpw(pwc.AlgoType, []byte(pwc.PW), pwc.KF)
 	} else if pubc != nil {
-		header, err = ops.Encpub(pubc.AlgoType, pubc.Pub, pubc.Pri)
+		header, err = ops.Encpub(pubc.AlgoType, pubc.PeerPub, pubc.MyPri)
 	} else {
 		return nil, errors.New("no password or public key")
 	}
@@ -327,7 +325,7 @@ func DecMsg(data []byte, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) (string, str
 	if pwc != nil {
 		err = ops.Decpw([]byte(pwc.PW), pwc.KF)
 	} else if pubc != nil {
-		err = ops.Decpub(pubc.Pri, pubc.Pub)
+		err = ops.Decpub(pubc.MyPri, pubc.MyPub, pubc.PeerPub)
 	} else {
 		return ops.Msg, "", errors.New("no password or public key")
 	}
@@ -345,7 +343,7 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 	// 1. pack files
 	pg.OnStart()
 	zipPath := TempPath()
-	defer Remove2(zipPath)
+	defer DelPath(zipPath)
 	var err error
 	switch cfg.PackType {
 	case "zip1":
@@ -379,14 +377,14 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 	ops := new(Opsec.Opsec)
 	ops.Reset()
 	ops.Msg, ops.Smsg = cfg.Msg, cfg.Smsg
-	ops.Size, ops.BodyAlgo, ops.ContAlgo = asize, cfg.EncType, cfg.PackType
+	ops.BodySize, ops.BodyAlgo, ops.BodyInfo = asize, cfg.EncType, []byte(cfg.PackType)
 	var prehead, header []byte
 	if pwc != nil {
 		prehead = GetPrehead("pw", cfg.ImgType, false)
 		header, err = ops.Encpw(pwc.AlgoType, []byte(pwc.PW), pwc.KF)
 	} else if pubc != nil {
 		prehead = GetPrehead("pub", cfg.ImgType, false)
-		header, err = ops.Encpub(pubc.AlgoType, pubc.Pub, pubc.Pri)
+		header, err = ops.Encpub(pubc.AlgoType, pubc.PeerPub, pubc.MyPri)
 	} else {
 		return errors.New("no password or public key")
 	}
@@ -473,7 +471,7 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) 
 	if pwc != nil {
 		err = ops.Decpw([]byte(pwc.PW), pwc.KF)
 	} else if pubc != nil {
-		err = ops.Decpub(pubc.Pri, pubc.Pub)
+		err = ops.Decpub(pubc.MyPri, pubc.MyPub, pubc.PeerPub)
 	} else {
 		return ops.Msg, "", errors.New("no password or public key")
 	}
@@ -485,7 +483,7 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) 
 
 	// 3. prepare worker
 	zipPath := TempPath()
-	defer Remove2(zipPath)
+	defer DelPath(zipPath)
 	zf, err := os.Create(zipPath)
 	if err != nil {
 		pg.OnError(err)
@@ -511,11 +509,11 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) 
 				return
 			case <-ticker.C:
 				sent := sm.Processed()
-				pg.OnUpdate(0.1 + 0.8*float64(sent)/float64(ops.Size))
+				pg.OnUpdate(0.1 + 0.8*float64(sent)/float64(ops.BodySize))
 			}
 		}
 	}()
-	err = sm.DeFile(f, ops.Size, zf)
+	err = sm.DeFile(f, ops.BodySize, zf)
 	stop <- true
 	<-done
 	pg.OnUpdate(0.9)
@@ -525,7 +523,7 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) 
 	}
 
 	// 5. unpack
-	switch ops.ContAlgo {
+	switch string(ops.BodyInfo) {
 	case "zip1":
 		zf.Close()
 		err = Szip.Unpack(zipPath, dst)

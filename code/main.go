@@ -31,6 +31,9 @@ type U1Config struct {
 	AutoExpire int               `json:"expire"`
 	Size       float32           `json:"size"`
 	Limit      int64             `json:"limit"`
+	OpsecPad   int64             `json:"opsecpad"`
+	JoinInput  bool              `json:"joininput"`
+	InitDir    string            `json:"initdir"`
 	Accounts   []string          `json:"accounts"`
 	IPs        []string          `json:"ips"`
 	PublicKeys map[string][]byte `json:"pubkeys"`
@@ -43,6 +46,9 @@ func (c *U1Config) Load() error {
 			c.AutoExpire = 20
 			c.Size = 1.0
 			c.Limit = 512 * 1048576
+			c.OpsecPad = 0
+			c.JoinInput = true
+			c.InitDir = GetPath()
 			c.Accounts = []string{}
 			c.IPs = []string{"127.0.0.1"}
 			c.PublicKeys = map[string][]byte{}
@@ -88,7 +94,7 @@ func (c *U1Config) DelPub(key string) error {
 
 // ===== account =====
 type Account struct {
-	KeyType  string // rsa1, ecc1
+	KeyType  string // rsa1, rsa2, ecc1, pqc1
 	PubKey   []byte
 	PriKey   []byte
 	KeyFiles map[string][]byte
@@ -147,11 +153,11 @@ func (a *Account) Load() error {
 		return errors.New("invalid account format")
 	}
 	a.KeyType = parts[0]
-	a.PubKey, err = Bencode.Decode(parts[1])
+	a.PubKey, err = Bencode.Decode64(parts[1], "") // pure base64
 	if err != nil {
 		return err
 	}
-	a.PriKey, err = Bencode.Decode(parts[2])
+	a.PriKey, err = Bencode.Decode64(parts[2], "") // pure base64
 	if err != nil {
 		return err
 	}
@@ -161,10 +167,10 @@ func (a *Account) Load() error {
 	if err := sm.Init(o.BodyAlgo, o.BodyKey); err != nil {
 		return err
 	}
-	if o.Size > 512*1048576 {
+	if o.BodySize > 512*1048576 {
 		return errors.New("body is too large")
 	}
-	enc := make([]byte, o.Size)
+	enc := make([]byte, o.BodySize)
 	_, err = io.ReadFull(f, enc)
 	if err != nil {
 		return err
@@ -179,7 +185,16 @@ func (a *Account) Load() error {
 
 func (a *Account) Store() error {
 	// 1. make plain data, make worker
-	smsg := strings.Join([]string{a.KeyType, Bencode.Encode(a.PubKey), Bencode.Encode(a.PriKey)}, "\n")
+	var err error
+	pub, err := Bencode.Encode64(a.PubKey, "", 0, 0) // pure base64
+	if err != nil {
+		return err
+	}
+	pri, err := Bencode.Encode64(a.PriKey, "", 0, 0) // pure base64
+	if err != nil {
+		return err
+	}
+	smsg := strings.Join([]string{a.KeyType, pub, pri}, "\n")
 	plainkf, err := Opsec.EncodeCfg(a.KeyFiles)
 	if err != nil {
 		return err
@@ -192,13 +207,13 @@ func (a *Account) Store() error {
 	// 2. make header and bodykey
 	o := new(Opsec.Opsec)
 	o.Reset()
-	o.Msg, o.Smsg, o.Size, o.BodyAlgo = a.Msg, smsg, sm.AfterSize(int64(len(plainkf))), sm.Algo
+	o.Msg, o.Smsg, o.BodySize, o.BodyAlgo = a.Msg, smsg, sm.AfterSize(int64(len(plainkf))), sm.Algo
 	var header []byte
 	switch a.KeyType {
-	case "rsa1":
-		header, err = o.Encpw("pbk1", []byte(a.PW), a.KF)
-	case "ecc1":
-		header, err = o.Encpw("arg1", []byte(a.PW), a.KF)
+	case "rsa1", "rsa2":
+		header, err = o.Encpw("pbk2", []byte(a.PW), a.KF)
+	case "ecc1", "pqc1":
+		header, err = o.Encpw("arg2", []byte(a.PW), a.KF)
 	default:
 		return errors.New("unsupported account type")
 	}
@@ -312,7 +327,7 @@ func (l *LoginPage) Fill() {
 	lbl1 := widget.NewLabel("[0B 00000000] keyfile not selected")
 	btn1a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl1, &l.AccKF) })
 	ent1 := widget.NewEntry()
-	ent1.SetPlaceHolder("port: 8001")
+	ent1.SetPlaceHolder("port/secret: 8001/...")
 	btn1b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(l.Window, lbl1, ent1, &l.AccKF) })
 	box1 := container.NewBorder(nil, nil, container.NewHBox(btn1a, btn1b), nil, ent1)
 
@@ -351,9 +366,9 @@ func (l *LoginPage) Fill() {
 	sel4c := widget.NewSelect([]string{"webp", "png", "bin"}, func(s string) { l.NewImg = s })
 	sel4c.SetSelected("webp")
 	l.NewImg = "webp"
-	sel4d := widget.NewSelect([]string{"ecc1", "rsa1"}, func(s string) { l.NewType = s })
-	sel4d.SetSelected("ecc1")
-	l.NewType = "ecc1"
+	sel4d := widget.NewSelect([]string{"rsa1", "rsa2", "ecc1", "pqc1"}, func(s string) { l.NewType = s })
+	sel4d.SetSelected("pqc1")
+	l.NewType = "pqc1"
 
 	// group5: make new account
 	ent5 := widget.NewEntry()
@@ -408,6 +423,9 @@ func (l *LoginPage) Fill() {
 }
 
 func (l *LoginPage) switchToMain() {
+	if l.Config.InitDir != "" {
+		os.Chdir(l.Config.InitDir)
+	}
 	m := new(MainPage)
 	m.App = l.App
 	m.Main(l.Config, l.Account)
@@ -796,7 +814,7 @@ func (p *Page1) Fill() {
 	sel2.PlaceHolder = "Select from Contacts"
 	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl2, &p.KeyData, p.Account.PriKey) })
 	ent2 := widget.NewEntry()
-	ent2.SetPlaceHolder("port: 8001")
+	ent2.SetPlaceHolder("port/secret: 8001/...")
 	btn2b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl2, ent2, &p.KeyData) })
 	box2 := container.NewVBox(
 		container.NewHBox(widget.NewLabel("Public/Private key (default=MyPriv):"), sel2),
@@ -888,7 +906,7 @@ func (p *Page1) Sign() {
 
 	// 3. update UI
 	fyne.Do(func() {
-		p.SignData = TrimStr(Bencode.Encode(sign), 80)
+		p.SignData, _ = Bencode.Encode64(sign, "#", 80, 10)
 		p.signview.SetText(p.SignData)
 	})
 }
@@ -929,7 +947,12 @@ func (p *Page1) Verify() {
 	if err != nil {
 		return
 	}
-	sign, err := Bencode.Decode(p.SignData)
+	var sign []byte
+	if strings.Contains(p.SignData, "#") {
+		sign, err = Bencode.Decode64(p.SignData, "#")
+	} else {
+		sign, err = Bencode.Decode64(p.SignData, "")
+	}
 	if err != nil {
 		return
 	}
@@ -1003,8 +1026,10 @@ func (p *Page2) Fill() {
 	p.IPtgt = ""
 	ent2a := widget.NewEntry()
 	ent2a.SetPlaceHolder("127.0.0.1:8002")
-	ent2b := widget.NewMultiLineEntry()
-	ent2b.SetPlaceHolder("secure message")
+	ent2b := widget.NewPasswordEntry()
+	ent2b.SetPlaceHolder("shared secret")
+	ent2c := widget.NewMultiLineEntry()
+	ent2c.SetPlaceHolder("secure message")
 
 	// group3: right action
 	btn3 := widget.NewButtonWithIcon("Send", theme.ConfirmIcon(), func() {
@@ -1021,7 +1046,7 @@ func (p *Page2) Fill() {
 		if !strings.Contains(addr, ":") {
 			addr += ":8002" // default port
 		}
-		go p.Send(addr, ent2b.Text)
+		go p.Send(addr, ent2b.Text, ent2c.Text)
 	})
 	btn3.Importance = widget.HighImportance
 	box3 := container.NewVBox(
@@ -1030,7 +1055,8 @@ func (p *Page2) Fill() {
 		widget.NewForm(
 			widget.NewFormItem("Peer IP", sel2),
 			widget.NewFormItem("Manual", ent2a),
-			widget.NewFormItem("Message", ent2b),
+			widget.NewFormItem("Context", ent2b),
+			widget.NewFormItem("Message", ent2c),
 		),
 		layout.NewSpacer(),
 		btn3,
@@ -1042,7 +1068,7 @@ func (p *Page2) Fill() {
 	p.Content.Objects = []fyne.CanvasObject{box4}
 }
 
-func (p *Page2) Send(addr string, smsg string) {
+func (p *Page2) Send(addr string, secret string, smsg string) {
 	var err error
 	var fromPub, toPub []byte
 	p.isWorking = true
@@ -1065,7 +1091,14 @@ func (p *Page2) Send(addr string, smsg string) {
 	copy(tgts, p.Targets)
 	pg := new(Progress)
 	pg.Init(p.Window, p.progbar, &err)
-	fromPub, toPub, err = Send(tgts, smsg, addr, p.Account.KeyType, pg)
+	switch p.Account.KeyType {
+	case "rsa1", "rsa2":
+		fromPub, toPub, err = Send(tgts, smsg, addr, secret, "pbk2", p.Account.KeyType, pg)
+	case "ecc1", "pqc1":
+		fromPub, toPub, err = Send(tgts, smsg, addr, secret, "arg2", p.Account.KeyType, pg)
+	default:
+		err = errors.New("Unsupported key type")
+	}
 }
 
 // ===== mode3: receive =====
@@ -1108,8 +1141,10 @@ func (p *Page3) Fill() {
 	sel1 := widget.NewSelect(p.Config.IPs, func(s string) { p.portTgt = s })
 	sel1.PlaceHolder = "Address list"
 	p.portTgt = ""
-	ent1 := widget.NewEntry()
-	ent1.SetPlaceHolder("8002")
+	ent1a := widget.NewEntry()
+	ent1a.SetPlaceHolder("8002")
+	ent1b := widget.NewPasswordEntry()
+	ent1b.SetPlaceHolder("shared secret")
 	p.msgview = widget.NewMultiLineEntry()
 	p.msgview.SetPlaceHolder("secure message")
 
@@ -1118,8 +1153,8 @@ func (p *Page3) Fill() {
 		if p.isWorking {
 			return
 		}
-		if ent1.Text != "" {
-			p.portTgt = ent1.Text
+		if ent1a.Text != "" {
+			p.portTgt = ent1a.Text
 		}
 		port := p.portTgt
 		if port == "" {
@@ -1135,7 +1170,7 @@ func (p *Page3) Fill() {
 		}
 		ips = t
 		list0.Refresh()
-		go p.Recv(port)
+		go p.Recv(port, ent1b.Text)
 	})
 	btn2.Importance = widget.HighImportance
 	box2 := container.NewVBox(
@@ -1143,7 +1178,8 @@ func (p *Page3) Fill() {
 		p.status, p.progbar, widget.NewSeparator(),
 		widget.NewForm(
 			widget.NewFormItem("Peer port", sel1),
-			widget.NewFormItem("Manual", ent1),
+			widget.NewFormItem("Manual", ent1a),
+			widget.NewFormItem("Context", ent1b),
 			widget.NewFormItem("Message", p.msgview),
 		),
 		layout.NewSpacer(),
@@ -1156,7 +1192,7 @@ func (p *Page3) Fill() {
 	p.Content.Objects = []fyne.CanvasObject{box3}
 }
 
-func (p *Page3) Recv(port string) {
+func (p *Page3) Recv(port string, secret string) {
 	var err error
 	var fromPub, toPub []byte
 	p.isWorking = true
@@ -1178,7 +1214,7 @@ func (p *Page3) Recv(port string) {
 	smsg := ""
 	pg := new(Progress)
 	pg.Init(p.Window, p.progbar, &err)
-	fromPub, toPub, smsg, err = Receive("./", port, pg)
+	fromPub, toPub, smsg, err = Receive("./", port, secret, pg)
 	fyne.Do(func() { p.msgview.SetText(smsg) })
 }
 
@@ -1216,7 +1252,19 @@ func (p *Page4) Fill() {
 	ent0.SetPlaceHolder("Secure message\n(Input)")
 	p.textResult = widget.NewMultiLineEntry()
 	p.textResult.SetPlaceHolder("Msg-mode result\n(Output)")
-	box0 := container.NewGridWithColumns(2, ent0, p.textResult)
+	btn0a := widget.NewButtonWithIcon("Fetch Input", theme.UploadIcon(), func() {
+		path, err := ZenityFile("Load Text File")
+		if err != nil {
+			return
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		ent0.SetText(string(data))
+	})
+	btn0b := widget.NewButtonWithIcon("Save Output", theme.DownloadIcon(), func() { os.WriteFile("yas-msg.txt", []byte(p.textResult.Text), 0644) })
+	box0 := container.NewVBox(container.NewGridWithColumns(2, ent0, p.textResult), container.NewGridWithColumns(2, btn0a, btn0b))
 
 	// group1: file management
 	p.list = widget.NewList(
@@ -1240,10 +1288,10 @@ func (p *Page4) Fill() {
 	p.progbar = widget.NewProgressBar()
 	txt := "Encrypt with password"
 	switch p.Account.KeyType {
-	case "rsa1":
-		txt += " | pbk1"
-	case "ecc1":
-		txt += " | arg1"
+	case "rsa1", "rsa2":
+		txt += " | pbk2"
+	case "ecc1", "pqc1":
+		txt += " | arg2"
 	}
 	box2 := container.NewVBox(widget.NewLabelWithStyle(txt, fyne.TextAlignCenter, fyne.TextStyle{Bold: true}), p.status, p.progbar)
 
@@ -1267,7 +1315,7 @@ func (p *Page4) Fill() {
 	sel4.PlaceHolder = "Select from Account"
 	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl4, &p.kf) })
 	ent4 := widget.NewEntry()
-	ent4.SetPlaceHolder("port: 8001")
+	ent4.SetPlaceHolder("port/secret: 8001/...")
 	btn4b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(p.Window, lbl4, ent4, &p.kf) })
 	box4 := container.NewVBox(
 		container.NewHBox(widget.NewLabel("KeyFile (default=Null):"), sel4),
@@ -1293,10 +1341,10 @@ func (p *Page4) Fill() {
 		// PwCplx
 		pwc := new(PwCplx)
 		switch p.Account.KeyType {
-		case "rsa1":
-			pwc.AlgoType = "pbk1"
-		case "ecc1":
-			pwc.AlgoType = "arg1"
+		case "rsa1", "rsa2":
+			pwc.AlgoType = "pbk2"
+		case "ecc1", "pqc1":
+			pwc.AlgoType = "arg2"
 		}
 		pwc.PW = ent5a.Text
 		pwc.KF = make([]byte, len(p.kf))
@@ -1314,7 +1362,18 @@ func (p *Page4) Fill() {
 		if dst == "" {
 			dst = "output"
 		}
-		go p.Encrypt(dst+"."+p.imgType, pwc, ec)
+		var dsts []string
+		if p.Config.JoinInput {
+			dsts = append(dsts, dst)
+		} else {
+			for _, tgt := range p.Targets {
+				dsts = append(dsts, filepath.Base(tgt))
+			}
+		}
+		for i := range dsts {
+			dsts[i] += "." + ec.ImgType
+		}
+		go p.Encrypt(dsts, pwc, ec)
 	})
 	btn6a.Importance = widget.HighImportance
 	box6 := container.NewBorder(nil, nil, nil, btn6a, ent6)
@@ -1332,7 +1391,7 @@ func (p *Page4) Fill() {
 	p.Content.Objects = []fyne.CanvasObject{box7b}
 }
 
-func (p *Page4) Encrypt(dst string, pwc *PwCplx, ec *EncCplx) {
+func (p *Page4) Encrypt(dsts []string, pwc *PwCplx, ec *EncCplx) {
 	var err error
 	p.isWorking = true
 	fyne.Do(func() { p.status.SetText("Working...") })
@@ -1357,9 +1416,20 @@ func (p *Page4) Encrypt(dst string, pwc *PwCplx, ec *EncCplx) {
 	if len(tgts) == 0 {
 		var res []byte
 		res, err = EncMsg(pwc, nil, ec, pg)
-		fyne.Do(func() { p.textResult.SetText(TrimStr(Bencode.Encode(res), 40)) })
-	} else {
-		err = EncFiles(tgts, dst, pwc, nil, ec, pg)
+		var txtRes string
+		if err == nil {
+			txtRes, err = Bencode.Encode64(res, "#", 0, 0)
+		}
+		fyne.Do(func() { p.textResult.SetText(txtRes) })
+	} else if p.Config.JoinInput { // join input files
+		err = EncFiles(tgts, dsts[0], pwc, nil, ec, pg)
+	} else { // separate files
+		for i, tgt := range tgts {
+			err = EncFiles([]string{tgt}, dsts[i], pwc, nil, ec, pg)
+			if err != nil {
+				break
+			}
+		}
 	}
 }
 
@@ -1395,7 +1465,19 @@ func (p *Page5) Fill() {
 	ent0.SetPlaceHolder("Text data\n(Input)")
 	p.textResult = widget.NewMultiLineEntry()
 	p.textResult.SetPlaceHolder("Secure message\n(Output)")
-	box0 := container.NewGridWithColumns(2, ent0, p.textResult)
+	btn0a := widget.NewButtonWithIcon("Fetch Input", theme.UploadIcon(), func() {
+		path, err := ZenityFile("Load Text File")
+		if err != nil {
+			return
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		ent0.SetText(string(data))
+	})
+	btn0b := widget.NewButtonWithIcon("Save Output", theme.DownloadIcon(), func() { os.WriteFile("yas-msg.txt", []byte(p.textResult.Text), 0644) })
+	box0 := container.NewVBox(container.NewGridWithColumns(2, ent0, p.textResult), container.NewGridWithColumns(2, btn0a, btn0b))
 
 	// group1: file management
 	p.list = widget.NewList(
@@ -1429,7 +1511,7 @@ func (p *Page5) Fill() {
 	sel4.PlaceHolder = "Select from Account"
 	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl4, &p.kf) })
 	ent4 := widget.NewEntry()
-	ent4.SetPlaceHolder("port: 8001")
+	ent4.SetPlaceHolder("port/secret: 8001/...")
 	btn4b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(p.Window, lbl4, ent4, &p.kf) })
 	box4 := container.NewVBox(
 		container.NewHBox(widget.NewLabel("KeyFile (default=Null):"), sel4),
@@ -1519,7 +1601,11 @@ func (p *Page5) Decrypt(data string, dst string, pwc *PwCplx) {
 	pg.Init(p.Window, p.progbar, &err)
 	if data != "" { // msg-only mode
 		var text []byte
-		text, err = Bencode.Decode(data)
+		if strings.Contains(data, "#") {
+			text, err = Bencode.Decode64(data, "#")
+		} else {
+			text, err = Bencode.Decode64(data, "")
+		}
 		if err != nil {
 			return
 		}
@@ -1571,7 +1657,19 @@ func (p *Page6) Fill() {
 	ent0.SetPlaceHolder("Secure message\n(Input)")
 	p.textResult = widget.NewMultiLineEntry()
 	p.textResult.SetPlaceHolder("Msg-mode result\n(Output)")
-	box0 := container.NewGridWithColumns(2, ent0, p.textResult)
+	btn0a := widget.NewButtonWithIcon("Fetch Input", theme.UploadIcon(), func() {
+		path, err := ZenityFile("Load Text File")
+		if err != nil {
+			return
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		ent0.SetText(string(data))
+	})
+	btn0b := widget.NewButtonWithIcon("Save Output", theme.DownloadIcon(), func() { os.WriteFile("yas-msg.txt", []byte(p.textResult.Text), 0644) })
+	box0 := container.NewVBox(container.NewGridWithColumns(2, ent0, p.textResult), container.NewGridWithColumns(2, btn0a, btn0b))
 
 	// group1: file management
 	p.list = widget.NewList(
@@ -1615,10 +1713,10 @@ func (p *Page6) Fill() {
 	sel4.PlaceHolder = "Select from Contacts"
 	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl4, &p.pub, nil) })
 	ent4 := widget.NewEntry()
-	ent4.SetPlaceHolder("port: 8001")
+	ent4.SetPlaceHolder("port/secret: 8001/...")
 	btn4b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl4, ent4, &p.pub) })
 	box4 := container.NewVBox(
-		container.NewHBox(widget.NewLabel("Public key (default=Null):"), sel4),
+		container.NewHBox(widget.NewLabel("Peer Public (default=Null):"), sel4),
 		container.NewBorder(nil, nil, container.NewHBox(btn4a, btn4b), nil, ent4),
 		lbl4,
 	)
@@ -1629,10 +1727,10 @@ func (p *Page6) Fill() {
 	btn5a := widget.NewButtonWithIcon("Clear", theme.ContentRemoveIcon(), func() { p.pri = nil; lbl5.SetText("[0B 00000000] null") })
 	btn5b := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl5, &p.pri, p.Account.PriKey) })
 	ent5 := widget.NewEntry()
-	ent5.SetPlaceHolder("port: 8001")
+	ent5.SetPlaceHolder("port/secret: 8001/...")
 	btn5c := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl5, ent5, &p.pri) })
 	box5 := container.NewVBox(
-		container.NewHBox(widget.NewLabel("Private key (default=MyPriv):"), btn5a),
+		container.NewHBox(widget.NewLabel("My Private (default=MyPriv):"), btn5a),
 		container.NewBorder(nil, nil, container.NewHBox(btn5b, btn5c), nil, ent5),
 		lbl5,
 	)
@@ -1649,7 +1747,7 @@ func (p *Page6) Fill() {
 
 		// PubCplx
 		pubc := new(PubCplx)
-		pubc.AlgoType, pubc.Pub, pubc.Pri = p.Account.KeyType, p.pub, p.pri
+		pubc.AlgoType, pubc.PeerPub, pubc.MyPri = p.Account.KeyType, p.pub, p.pri
 
 		// EncCplx
 		ec := new(EncCplx)
@@ -1663,7 +1761,18 @@ func (p *Page6) Fill() {
 		if dst == "" {
 			dst = "output"
 		}
-		go p.Encrypt(dst+"."+p.imgType, pubc, ec)
+		var dsts []string
+		if p.Config.JoinInput {
+			dsts = append(dsts, dst)
+		} else {
+			for _, tgt := range p.Targets {
+				dsts = append(dsts, filepath.Base(tgt))
+			}
+		}
+		for i := range dsts {
+			dsts[i] += "." + ec.ImgType
+		}
+		go p.Encrypt(dsts, pubc, ec)
 	})
 	btn6a.Importance = widget.HighImportance
 	box6 := container.NewBorder(ent6a, nil, nil, btn6a, ent6b)
@@ -1681,7 +1790,7 @@ func (p *Page6) Fill() {
 	p.Content.Objects = []fyne.CanvasObject{box7b}
 }
 
-func (p *Page6) Encrypt(dst string, pubc *PubCplx, ec *EncCplx) {
+func (p *Page6) Encrypt(dsts []string, pubc *PubCplx, ec *EncCplx) {
 	var err error
 	p.isWorking = true
 	fyne.Do(func() { p.status.SetText("Working...") })
@@ -1706,9 +1815,20 @@ func (p *Page6) Encrypt(dst string, pubc *PubCplx, ec *EncCplx) {
 	if len(tgts) == 0 {
 		var res []byte
 		res, err = EncMsg(nil, pubc, ec, pg)
-		fyne.Do(func() { p.textResult.SetText(TrimStr(Bencode.Encode(res), 40)) })
-	} else {
-		err = EncFiles(tgts, dst, nil, pubc, ec, pg)
+		var txtRes string
+		if err == nil {
+			txtRes, err = Bencode.Encode64(res, "#", 0, 0)
+		}
+		fyne.Do(func() { p.textResult.SetText(txtRes) })
+	} else if p.Config.JoinInput { // join input files
+		err = EncFiles(tgts, dsts[0], nil, pubc, ec, pg)
+	} else { // separate files
+		for i, tgt := range tgts {
+			err = EncFiles([]string{tgt}, dsts[i], nil, pubc, ec, pg)
+			if err != nil {
+				break
+			}
+		}
 	}
 }
 
@@ -1729,12 +1849,15 @@ type Page7 struct {
 	progbar   *widget.ProgressBar
 
 	msgView *widget.Entry
-	pub     []byte
+	peerPub []byte
+	myPub   []byte
 	pri     []byte
 }
 
 func (p *Page7) Main(w fyne.Window, co *fyne.Container, c *U1Config, a *Account) {
 	p.Window, p.Content, p.Config, p.Account = w, co, c, a
+	p.Targets = make([]string, 0)
+	p.isWorking = false
 }
 
 func (p *Page7) Fill() {
@@ -1743,7 +1866,19 @@ func (p *Page7) Fill() {
 	ent0.SetPlaceHolder("Text data\n(Input)")
 	p.textResult = widget.NewMultiLineEntry()
 	p.textResult.SetPlaceHolder("Secure message\n(Output)")
-	box0 := container.NewGridWithColumns(2, ent0, p.textResult)
+	btn0a := widget.NewButtonWithIcon("Fetch Input", theme.UploadIcon(), func() {
+		path, err := ZenityFile("Load Text File")
+		if err != nil {
+			return
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		ent0.SetText(string(data))
+	})
+	btn0b := widget.NewButtonWithIcon("Save Output", theme.DownloadIcon(), func() { os.WriteFile("yas-msg.txt", []byte(p.textResult.Text), 0644) })
+	box0 := container.NewVBox(container.NewGridWithColumns(2, ent0, p.textResult), container.NewGridWithColumns(2, btn0a, btn0b))
 
 	// group1: file management
 	p.list = widget.NewList(
@@ -1770,31 +1905,46 @@ func (p *Page7) Fill() {
 	p.progbar = widget.NewProgressBar()
 	box2 := container.NewVBox(widget.NewLabelWithStyle("Decrypt with public key", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}), p.status, p.progbar)
 
-	// group4: public key
-	p.pub = nil
+	// group3: peer public key
+	p.peerPub = nil
+	lbl3 := widget.NewLabel("[0B 00000000] default")
+	sel3 := widget.NewSelect(p.Config.GetPub(), func(s string) { ChooseKF(lbl3, &p.peerPub, s, p.Config.PublicKeys) })
+	sel3.PlaceHolder = "Select from Contacts"
+	btn3a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl3, &p.peerPub, nil) })
+	ent3 := widget.NewEntry()
+	ent3.SetPlaceHolder("port/secret: 8001/...")
+	btn3b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl3, ent3, &p.peerPub) })
+	box3 := container.NewVBox(
+		container.NewHBox(widget.NewLabel("Peer Public (default=Null):"), sel3),
+		container.NewBorder(nil, nil, container.NewHBox(btn3a, btn3b), nil, ent3),
+		lbl3,
+	)
+
+	// group4: my public key
+	p.myPub = nil
 	lbl4 := widget.NewLabel("[0B 00000000] default")
-	sel4 := widget.NewSelect(p.Config.GetPub(), func(s string) { ChooseKF(lbl4, &p.pub, s, p.Config.PublicKeys) })
+	sel4 := widget.NewSelect(p.Config.GetPub(), func(s string) { ChooseKF(lbl4, &p.myPub, s, p.Config.PublicKeys) })
 	sel4.PlaceHolder = "Select from Contacts"
-	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl4, &p.pub, nil) })
+	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl4, &p.myPub, nil) })
 	ent4 := widget.NewEntry()
-	ent4.SetPlaceHolder("port: 8001")
-	btn4b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl4, ent4, &p.pub) })
+	ent4.SetPlaceHolder("port/secret: 8001/...")
+	btn4b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl4, ent4, &p.myPub) })
 	box4 := container.NewVBox(
-		container.NewHBox(widget.NewLabel("Public key (default=Null):"), sel4),
+		container.NewHBox(widget.NewLabel("My Public (default=Null):"), sel4),
 		container.NewBorder(nil, nil, container.NewHBox(btn4a, btn4b), nil, ent4),
 		lbl4,
 	)
 
-	// group5: private key
+	// group5: my private key
 	p.pri = p.Account.PriKey
 	lbl5 := widget.NewLabel(fmt.Sprintf("[%dB %s] default", len(p.pri), Opsec.Crc32(p.pri)))
 	btn5a := widget.NewButtonWithIcon("Clear", theme.ContentRemoveIcon(), func() { p.pri = nil; lbl5.SetText("[0B 00000000] null") })
 	btn5b := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectPub(lbl5, &p.pri, p.Account.PriKey) })
 	ent5 := widget.NewEntry()
-	ent5.SetPlaceHolder("port: 8001")
+	ent5.SetPlaceHolder("port/secret: 8001/...")
 	btn5c := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceivePub(p.Window, lbl5, ent5, &p.pri) })
 	box5 := container.NewVBox(
-		container.NewHBox(widget.NewLabel("Private key (default=MyPriv):"), btn5a),
+		container.NewHBox(widget.NewLabel("My Private (default=MyPriv):"), btn5a),
 		container.NewBorder(nil, nil, container.NewHBox(btn5b, btn5c), nil, ent5),
 		lbl5,
 	)
@@ -1811,7 +1961,10 @@ func (p *Page7) Fill() {
 
 		// PubCplx
 		pubc := new(PubCplx)
-		pubc.Pub, pubc.Pri = p.pub, p.pri
+		pubc.AlgoType = p.Account.KeyType
+		pubc.PeerPub = p.peerPub
+		pubc.MyPub = p.myPub
+		pubc.MyPri = p.pri
 
 		dst := CleanPath(ent6.Text)
 		if dst == "" {
@@ -1826,6 +1979,7 @@ func (p *Page7) Fill() {
 	// group7: main layout
 	box7a := container.NewVBox(
 		box2, widget.NewSeparator(),
+		box3, widget.NewSeparator(),
 		box4, widget.NewSeparator(),
 		box5, widget.NewSeparator(),
 		box6,
@@ -1874,7 +2028,11 @@ func (p *Page7) Decrypt(data string, dst string, pubc *PubCplx) {
 	pg.Init(p.Window, p.progbar, &err)
 	if data != "" { // msg-only mode
 		var text []byte
-		text, err = Bencode.Decode(data)
+		if strings.Contains(data, "#") {
+			text, err = Bencode.Decode64(data, "#")
+		} else {
+			text, err = Bencode.Decode64(data, "")
+		}
 		if err != nil {
 			return
 		}
@@ -1962,15 +2120,21 @@ func (p *Page8) Fill() {
 	ent1b := widget.NewMultiLineEntry()
 	ent1b.SetPlaceHolder("New public key data")
 	pubs := p.Config.GetPub()
-	sel1a := widget.NewSelect([]string{"ecc1", "rsa1"}, func(s string) { p.pubType = s })
-	sel1a.SetSelected("ecc1")
-	p.pubType = "ecc1"
+	sel1a := widget.NewSelect([]string{"rsa1", "rsa2", "ecc1", "pqc1"}, func(s string) { p.pubType = s })
+	sel1a.SetSelected("pqc1")
+	p.pubType = "pqc1"
 	sel1b := widget.NewSelect(pubs, func(s string) { p.pubSelected = s })
 	sel1b.PlaceHolder = "Public key list"
 	p.pubSelected = ""
 	btn1a := widget.NewButtonWithIcon("Add", theme.ContentAddIcon(), func() {
 		if ent1a.Text != "" && ent1b.Text != "" {
-			newpub, err := Bencode.Decode(ent1b.Text)
+			var newpub []byte
+			var err error
+			if strings.Contains(ent1b.Text, "#") {
+				newpub, err = Bencode.Decode64(ent1b.Text, "#")
+			} else {
+				newpub, err = Bencode.Decode64(ent1b.Text, "")
+			}
 			if err != nil {
 				dialog.ShowError(err, p.Window)
 				return
@@ -2018,7 +2182,7 @@ func (p *Page8) Fill() {
 	lbl2 := widget.NewLabel("[0B 00000000] keyfile not selected")
 	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl2, &p.kf) })
 	ent2a := widget.NewEntry()
-	ent2a.SetPlaceHolder("port: 8001")
+	ent2a.SetPlaceHolder("port/secret: 8001/...")
 	btn2b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(p.Window, lbl2, ent2a, &p.kf) })
 	ent2b := widget.NewEntry()
 	ent2b.SetPlaceHolder("New keyfile name")
@@ -2112,17 +2276,42 @@ func (p *Page9) Fill() {
 	box0 := container.NewVBox(p.publbl, p.pubent, p.prilbl, p.prient)
 
 	// group1: keypair functions
-	btn1a := widget.NewButtonWithIcon("Fetch", theme.ContentPasteIcon(), func() {
+	btn1a := widget.NewButtonWithIcon("Download", theme.DownloadIcon(), func() {
+		dialog.ShowConfirm("Confirm", "Download keypair?", func(ok bool) {
+			if !ok {
+				return
+			}
+			err1 := os.WriteFile("yas-public.txt", []byte(p.pubent.Text), 0644)
+			err2 := os.WriteFile("yas-private.txt", []byte(p.prient.Text), 0644)
+			if err1 != nil {
+				dialog.ShowError(err1, p.Window)
+			} else if err2 != nil {
+				dialog.ShowError(err2, p.Window)
+			}
+		}, p.Window)
+	})
+	btn1a.Importance = widget.HighImportance
+	btn1b := widget.NewButtonWithIcon("Fetch", theme.ContentPasteIcon(), func() {
 		dialog.ShowConfirm("Confirm", "Fetch keypair?", func(ok bool) {
 			if !ok {
 				return
 			}
-			pub, err := Bencode.Decode(p.pubent.Text)
+			var pub, pri []byte
+			var err error
+			if strings.Contains(p.pubent.Text, "#") {
+				pub, err = Bencode.Decode64(p.pubent.Text, "#")
+			} else {
+				pub, err = Bencode.Decode64(p.pubent.Text, "")
+			}
 			if err != nil {
 				dialog.ShowError(err, p.Window)
 				return
 			}
-			pri, err := Bencode.Decode(p.prient.Text)
+			if strings.Contains(p.prient.Text, "#") {
+				pri, err = Bencode.Decode64(p.prient.Text, "#")
+			} else {
+				pri, err = Bencode.Decode64(p.prient.Text, "")
+			}
 			if err != nil {
 				dialog.ShowError(err, p.Window)
 				return
@@ -2135,8 +2324,8 @@ func (p *Page9) Fill() {
 			}
 		}, p.Window)
 	})
-	btn1a.Importance = widget.HighImportance
-	btn1b := widget.NewButtonWithIcon("Regen", theme.ViewRefreshIcon(), func() {
+	btn1b.Importance = widget.HighImportance
+	btn1c := widget.NewButtonWithIcon("Regen", theme.ViewRefreshIcon(), func() {
 		dialog.ShowConfirm("Confirm", "Regenerate keypair?", func(ok bool) {
 			if !ok {
 				return
@@ -2148,17 +2337,17 @@ func (p *Page9) Fill() {
 			}
 		}, p.Window)
 	})
-	btn1b.Importance = widget.HighImportance
+	btn1c.Importance = widget.HighImportance
 	box1 := container.NewVBox(
 		widget.NewLabelWithStyle("Manage keypair", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		box0, layout.NewSpacer(), container.NewGridWithColumns(2, btn1a, btn1b),
+		box0, layout.NewSpacer(), container.NewGridWithColumns(3, btn1a, btn1b, btn1c),
 	)
 
 	// group2: keyfile selection
 	lbl2 := widget.NewLabel("[0B 00000000] keyfile not selected")
 	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { SelectKF(lbl2, &p.kf) })
 	ent2 := widget.NewEntry()
-	ent2.SetPlaceHolder("port: 8001")
+	ent2.SetPlaceHolder("port/secret: 8001/...")
 	btn2b := widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), func() { ReceiveKF(p.Window, lbl2, ent2, &p.kf) })
 	box2 := container.NewBorder(nil, nil, container.NewHBox(btn2a, btn2b), nil, ent2)
 
@@ -2198,8 +2387,8 @@ func (p *Page9) Fill() {
 }
 
 func (p *Page9) Refresh() {
-	pub := TrimStr(Bencode.Encode(p.Account.PubKey), 40)
-	pri := TrimStr(Bencode.Encode(p.Account.PriKey), 40)
+	pub, _ := Bencode.Encode64(p.Account.PubKey, "#", 80, 10)
+	pri, _ := Bencode.Encode64(p.Account.PriKey, "#", 80, 10)
 	p.publbl.SetText(fmt.Sprintf("My public key (%dB %s)", len(p.Account.PubKey), Opsec.Crc32(p.Account.PubKey)))
 	p.pubent.SetText(pub)
 	p.prilbl.SetText(fmt.Sprintf("My private key (%dB %s)", len(p.Account.PriKey), Opsec.Crc32(p.Account.PriKey)))

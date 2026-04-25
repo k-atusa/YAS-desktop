@@ -15,7 +15,7 @@ import (
 	"github.com/k-atusa/USAG-Lib/Szip"
 )
 
-var YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.2.0"
+var YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.3.0"
 
 // abstract status indicator
 type ProgStatus interface {
@@ -70,6 +70,7 @@ type EncCplx struct {
 	ImgType  string // webp, png, bin
 	PackType string // zip1, tar1
 	EncType  string // gcm1, gcmx1
+	DoPad    bool
 
 	Msg  string
 	Smsg string
@@ -107,28 +108,39 @@ func Unpack(src string, dst string, tp string) error {
 	}
 }
 
-// send targets (fromPub, toPub), keyword: sha3, pbk2, arg2, rsa1, rsa2, ecc1, pqc1, fixed: zip1, gcmx1
-func Send(srcs []string, smsg string, addr string, secret string, hmode string, pmode string, pg ProgStatus) ([]byte, []byte, error) {
+type NetCplx struct {
+	Addr   string // ip:port, port
+	Secret string
+
+	HashMode string // sha3, pbk2, arg2
+	PubMode  string // rsa1, rsa2, ecc1, pqc1
+	DoPad    bool
+
+	Pg ProgStatus
+}
+
+// send targets (fromPub, toPub), fixed: zip1, gcmx1
+func Send(srcs []string, smsg string, netc *NetCplx) ([]byte, []byte, error) {
 	// 1. pack targets (zip1)
-	pg.OnStart()
+	netc.Pg.OnStart()
 	zipPath := TempPath()
 	defer DelPath(zipPath)
 	if len(srcs) == 0 {
 		os.WriteFile(zipPath, nil, 0644)
 	} else {
 		if err := Pack(srcs, zipPath, "zip1"); err != nil {
-			pg.OnError(err)
+			netc.Pg.OnError(err)
 			return nil, nil, err
 		}
 	}
-	pg.OnUpdate(0.1) // packing is 10%
+	netc.Pg.OnUpdate(0.1) // packing is 10%
 
 	// 2. make connection
 	sock := new(TCPsocket)
-	err := sock.MakeConnection(addr)
+	err := sock.MakeConnection(netc.Addr)
 	defer sock.Close()
 	if err != nil {
-		pg.OnError(err)
+		netc.Pg.OnError(err)
 		return nil, nil, err
 	}
 
@@ -138,7 +150,7 @@ func Send(srcs []string, smsg string, addr string, secret string, hmode string, 
 	if len(srcs) == 0 {
 		con += MODE_MSGONLY
 	}
-	switch hmode {
+	switch netc.HashMode {
 	case "sha3":
 		con += HASH_SHA3
 	case "pbk2":
@@ -146,7 +158,7 @@ func Send(srcs []string, smsg string, addr string, secret string, hmode string, 
 	case "arg2":
 		con += HASH_ARG2
 	}
-	switch pmode {
+	switch netc.PubMode {
 	case "rsa1":
 		con += ASYM_RSA1
 	case "rsa2":
@@ -156,19 +168,19 @@ func Send(srcs []string, smsg string, addr string, secret string, hmode string, 
 	case "pqc1":
 		con += ASYM_PQC1
 	}
-	tp.Init(con, false, secret, sock.Conn)
-	pg.OnUpdate(0.2) // connecting is 10%
+	tp.Init(con, false, netc.DoPad, netc.Secret, sock.Conn)
+	netc.Pg.OnUpdate(0.2) // connecting is 10%
 
 	// 4. open packed file
 	f, err := os.Open(zipPath)
 	if err != nil {
-		pg.OnError(err)
+		netc.Pg.OnError(err)
 		return nil, nil, err
 	}
 	defer f.Close()
 	stat, err := f.Stat()
 	if err != nil {
-		pg.OnError(err)
+		netc.Pg.OnError(err)
 		return nil, nil, err
 	}
 
@@ -188,10 +200,10 @@ func Send(srcs []string, smsg string, addr string, secret string, hmode string, 
 				stage, sent, total := tp.GetStatus()
 				if total > 0 && !isStarted { // start if total exists
 					isStarted = true
-					pg.OnUpdate(0.2 + 0.8*float64(sent)/float64(total))
+					netc.Pg.OnUpdate(0.2 + 0.8*float64(sent)/float64(total))
 				}
 				if isStarted { // update progress
-					pg.OnUpdate(0.2 + 0.8*float64(sent)/float64(total))
+					netc.Pg.OnUpdate(0.2 + 0.8*float64(sent)/float64(total))
 					if stage == STAGE_ERROR {
 						return // halt if error
 					}
@@ -203,34 +215,34 @@ func Send(srcs []string, smsg string, addr string, secret string, hmode string, 
 	stop <- true
 	<-done
 	if err == nil {
-		pg.OnEnd()
+		netc.Pg.OnEnd()
 	} else {
-		pg.OnError(err)
+		netc.Pg.OnError(err)
 	}
 	return fromPub, toPub, err
 }
 
 // receive targets (fromPub, toPub), fixed: zip1, gcmx1
-func Receive(dst string, port string, secret string, pg ProgStatus) ([]byte, []byte, string, error) {
+func Receive(dst string, netc *NetCplx) ([]byte, []byte, string, error) {
 	// 1. make connection
-	pg.OnStart()
+	netc.Pg.OnStart()
 	sock := new(TCPsocket)
-	err := sock.MakeListener(port)
+	err := sock.MakeListener(netc.Addr)
 	defer sock.Close()
 	if err != nil {
-		pg.OnError(err)
+		netc.Pg.OnError(err)
 		return nil, nil, "", err
 	}
 
 	// 2. accept connection, set temp path
 	tp := new(TP1)
-	tp.Init(0, false, secret, sock.Conn) // listener does not set mode
-	pg.OnUpdate(0.1)                     // connecting is 10%
+	tp.Init(0, false, netc.DoPad, netc.Secret, sock.Conn) // listener does not set mode
+	netc.Pg.OnUpdate(0.1)                                 // connecting is 10%
 	zipPath := TempPath()
 	defer DelPath(zipPath)
 	f, err := os.Create(zipPath)
 	if err != nil {
-		pg.OnError(err)
+		netc.Pg.OnError(err)
 		return nil, nil, "", err
 	}
 
@@ -250,10 +262,10 @@ func Receive(dst string, port string, secret string, pg ProgStatus) ([]byte, []b
 				stage, sent, total := tp.GetStatus()
 				if total > 0 && !isStarted { // start if total exists
 					isStarted = true
-					pg.OnUpdate(0.1 + 0.8*float64(sent)/float64(total))
+					netc.Pg.OnUpdate(0.1 + 0.8*float64(sent)/float64(total))
 				}
 				if isStarted { // update progress
-					pg.OnUpdate(0.1 + 0.8*float64(sent)/float64(total))
+					netc.Pg.OnUpdate(0.1 + 0.8*float64(sent)/float64(total))
 					if stage == STAGE_ERROR {
 						return // halt if error
 					}
@@ -265,20 +277,20 @@ func Receive(dst string, port string, secret string, pg ProgStatus) ([]byte, []b
 	f.Close()
 	stop <- true
 	<-done
-	pg.OnUpdate(0.9)
+	netc.Pg.OnUpdate(0.9)
 	if err != nil {
-		pg.OnError(err)
+		netc.Pg.OnError(err)
 		return nil, nil, "", err
 	}
 
 	// 4. unpack if required (zip1)
-	if tp.Mode&MODE_MSGONLY == 0 {
-		if err := Szip.Unpack(zipPath, dst); err != nil {
-			pg.OnError(err)
+	if (tp.Mode & 0xF) != MODE_MSGONLY {
+		if err := Unpack(zipPath, dst, "zip1"); err != nil {
+			netc.Pg.OnError(err)
 			return nil, nil, "", err
 		}
 	}
-	pg.OnEnd()
+	netc.Pg.OnEnd()
 	return fromPub, toPub, smsg, nil
 }
 
@@ -394,15 +406,21 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 	}
 
 	// 4. write header
+	var writed int64 = 0
 	f, err := os.Create(dst)
 	if err != nil {
 		pg.OnError(err)
 		return err
 	}
 	defer f.Close()
+	writed += int64(len(prehead)) // preheader
 	if _, err := f.Write(prehead); err != nil {
 		pg.OnError(err)
 		return err
+	}
+	writed += int64(len(header)) + 6 // opsec magic
+	if len(header) >= 65535 {
+		writed += 2
 	}
 	if err := ops.Write(f, header); err != nil {
 		pg.OnError(err)
@@ -437,9 +455,21 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 		pg.OnError(err)
 		return err
 	}
+	writed += ops.BodySize // bodySize
 	err = sm.EnFile(zf, zsize, f)
 	stop <- true
 	<-done
+	if err != nil {
+		pg.OnError(err)
+		return err
+	}
+
+	// pad tail if require
+	if cfg.DoPad {
+		padlen := Opsec.PadLen(writed)
+		writed += padlen
+		err = Opsec.PadFile(f, padlen)
+	}
 	if err == nil {
 		pg.OnEnd()
 	} else {

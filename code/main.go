@@ -31,8 +31,8 @@ type U1Config struct {
 	AutoExpire int               `json:"expire"`
 	Size       float32           `json:"size"`
 	Limit      int64             `json:"limit"`
-	OpsecPad   int64             `json:"opsecpad"`
-	JoinInput  bool              `json:"joininput"`
+	DoPad      bool              `json:"dopad"`
+	MultiFile  bool              `json:"mulfile"`
 	InitDir    string            `json:"initdir"`
 	Accounts   []string          `json:"accounts"`
 	IPs        []string          `json:"ips"`
@@ -46,9 +46,9 @@ func (c *U1Config) Load() error {
 			c.AutoExpire = 20
 			c.Size = 1.0
 			c.Limit = 512 * 1048576
-			c.OpsecPad = 0
-			c.JoinInput = true
-			c.InitDir = GetPath()
+			c.DoPad = true
+			c.MultiFile = false
+			c.InitDir = ""
 			c.Accounts = []string{}
 			c.IPs = []string{"127.0.0.1"}
 			c.PublicKeys = map[string][]byte{}
@@ -99,10 +99,11 @@ type Account struct {
 	PriKey   []byte
 	KeyFiles map[string][]byte
 
-	Path string
-	PW   string
-	KF   []byte
-	Msg  string
+	Path  string
+	PW    string
+	KF    []byte
+	Msg   string
+	DoPad bool
 }
 
 func (a *Account) NewKey() error {
@@ -230,13 +231,22 @@ func (a *Account) Store() error {
 		return err
 	}
 	defer f.Close()
+	var writed int64 = 0
 	switch {
 	case strings.HasSuffix(a.Path, ".webp"):
-		_, err = f.Write(GetPrehead("zip", "webp", false))
+		tb := GetPrehead("zip", "webp", false)
+		writed += int64(len(tb))
+		_, err = f.Write(tb)
 	case strings.HasSuffix(a.Path, ".png"):
-		_, err = f.Write(GetPrehead("zip", "png", false))
+		tb := GetPrehead("zip", "png", false)
+		writed += int64(len(tb))
+		_, err = f.Write(tb)
 	}
 	if err == nil {
+		writed += int64(len(header)) + 6 // Opsec magic
+		if len(header) >= 65535 {
+			writed += 2
+		}
 		err = o.Write(f, header)
 	}
 	if err != nil {
@@ -248,7 +258,18 @@ func (a *Account) Store() error {
 	if err != nil {
 		return err
 	}
+	writed += int64(len(enc))
 	_, err = f.Write(enc)
+	if err != nil {
+		return err
+	}
+
+	// 5. pad tail if required
+	if a.DoPad {
+		padLen := Opsec.PadLen(writed)
+		writed += padLen
+		err = Opsec.PadFile(f, padLen)
+	}
 	return err
 }
 
@@ -339,7 +360,7 @@ func (l *LoginPage) Fill() {
 			dialog.ShowError(fmt.Errorf("Account not selected"), l.Window)
 			return
 		}
-		l.Account.PW, l.Account.KF = ent2.Text, l.AccKF
+		l.Account.PW, l.Account.KF, l.Account.DoPad = ent2.Text, l.AccKF, l.Config.DoPad
 		err := l.Account.Load()
 		if err != nil {
 			dialog.ShowError(err, l.Window)
@@ -387,7 +408,7 @@ func (l *LoginPage) Fill() {
 		}
 
 		// 3. make account
-		l.Account.KeyType, l.Account.PW, l.Account.KF, l.Account.Msg = l.NewType, ent2.Text, l.AccKF, ent4b.Text
+		l.Account.KeyType, l.Account.PW, l.Account.KF, l.Account.Msg, l.Account.DoPad = l.NewType, ent2.Text, l.AccKF, ent4b.Text, l.Config.DoPad
 		if err := l.Account.NewKey(); err != nil {
 			dialog.ShowError(err, l.Window)
 			return
@@ -1091,13 +1112,22 @@ func (p *Page2) Send(addr string, secret string, smsg string) {
 	copy(tgts, p.Targets)
 	pg := new(Progress)
 	pg.Init(p.Window, p.progbar, &err)
+	nc := &NetCplx{
+		Addr:   addr,
+		Secret: secret,
+		DoPad:  p.Config.DoPad,
+		Pg:     pg,
+	}
 	switch p.Account.KeyType {
 	case "rsa1", "rsa2":
-		fromPub, toPub, err = Send(tgts, smsg, addr, secret, "pbk2", p.Account.KeyType, pg)
+		nc.HashMode, nc.PubMode = "pbk2", p.Account.KeyType
 	case "ecc1", "pqc1":
-		fromPub, toPub, err = Send(tgts, smsg, addr, secret, "arg2", p.Account.KeyType, pg)
+		nc.HashMode, nc.PubMode = "arg2", p.Account.KeyType
 	default:
 		err = errors.New("Unsupported key type")
+	}
+	if err == nil {
+		fromPub, toPub, err = Send(tgts, smsg, nc)
 	}
 }
 
@@ -1214,7 +1244,13 @@ func (p *Page3) Recv(port string, secret string) {
 	smsg := ""
 	pg := new(Progress)
 	pg.Init(p.Window, p.progbar, &err)
-	fromPub, toPub, smsg, err = Receive("./", port, secret, pg)
+	nc := &NetCplx{
+		Addr:   port,
+		Secret: secret,
+		DoPad:  p.Config.DoPad,
+		Pg:     pg,
+	}
+	fromPub, toPub, smsg, err = Receive("./", nc)
 	fyne.Do(func() { p.msgview.SetText(smsg) })
 }
 
@@ -1332,7 +1368,12 @@ func (p *Page4) Fill() {
 
 	// group6: output, function
 	ent6 := widget.NewEntry()
-	ent6.SetPlaceHolder("Output name")
+	if p.Config.MultiFile {
+		ent6.SetPlaceHolder("Disabled (AutoGen)")
+		ent6.Disable()
+	} else {
+		ent6.SetPlaceHolder("Output name")
+	}
 	btn6a := widget.NewButtonWithIcon("Encrypt", theme.ViewRestoreIcon(), func() {
 		if p.isWorking {
 			return
@@ -1357,18 +1398,18 @@ func (p *Page4) Fill() {
 		ec.EncType = p.encType
 		ec.Msg = ent5b.Text
 		ec.Smsg = ent0.Text
+		ec.DoPad = p.Config.DoPad
 
-		dst := CleanPath(ent6.Text)
-		if dst == "" {
-			dst = "output"
-		}
-		var dsts []string
-		if p.Config.JoinInput {
-			dsts = append(dsts, dst)
+		// dsts
+		dsts := make([]string, 0)
+		if p.Config.MultiFile {
+			dsts = append(dsts, p.Targets...)
 		} else {
-			for _, tgt := range p.Targets {
-				dsts = append(dsts, filepath.Base(tgt))
+			dst := CleanPath(ent6.Text)
+			if dst == "" {
+				dst = "output"
 			}
+			dsts = append(dsts, dst)
 		}
 		for i := range dsts {
 			dsts[i] += "." + ec.ImgType
@@ -1413,7 +1454,7 @@ func (p *Page4) Encrypt(dsts []string, pwc *PwCplx, ec *EncCplx) {
 	copy(tgts, p.Targets)
 	pg := new(Progress)
 	pg.Init(p.Window, p.progbar, &err)
-	if len(tgts) == 0 {
+	if len(tgts) == 0 { // msg-mode
 		var res []byte
 		res, err = EncMsg(pwc, nil, ec, pg)
 		var txtRes string
@@ -1421,15 +1462,15 @@ func (p *Page4) Encrypt(dsts []string, pwc *PwCplx, ec *EncCplx) {
 			txtRes, err = Bencode.Encode64(res, "#", 0, 0)
 		}
 		fyne.Do(func() { p.textResult.SetText(txtRes) })
-	} else if p.Config.JoinInput { // join input files
-		err = EncFiles(tgts, dsts[0], pwc, nil, ec, pg)
-	} else { // separate files
+	} else if p.Config.MultiFile { // multi-mode
 		for i, tgt := range tgts {
 			err = EncFiles([]string{tgt}, dsts[i], pwc, nil, ec, pg)
 			if err != nil {
 				break
 			}
 		}
+	} else { // normal-mode
+		err = EncFiles(tgts, dsts[0], pwc, nil, ec, pg)
 	}
 }
 
@@ -1528,7 +1569,12 @@ func (p *Page5) Fill() {
 
 	// group6: output, function
 	ent6 := widget.NewEntry()
-	ent6.SetPlaceHolder("Output name")
+	if p.Config.MultiFile {
+		ent6.SetPlaceHolder("Disabled (AutoGen)")
+		ent6.Disable()
+	} else {
+		ent6.SetPlaceHolder("Output name")
+	}
 	btn6a := widget.NewButtonWithIcon("Decrypt", theme.ViewFullScreenIcon(), func() {
 		if p.isWorking {
 			return
@@ -1544,7 +1590,9 @@ func (p *Page5) Fill() {
 		if dst == "" {
 			dst = "./"
 		}
-		os.MkdirAll(dst, 0644)
+		if !p.Config.MultiFile {
+			os.MkdirAll(dst, 0644)
+		}
 		go p.Decrypt(ent0.Text, dst, pwc)
 	})
 	btn6a.Importance = widget.HighImportance
@@ -1613,11 +1661,20 @@ func (p *Page5) Decrypt(data string, dst string, pwc *PwCplx) {
 		fyne.Do(func() { p.msgView.SetText(msg); p.textResult.SetText(smsg) })
 		return
 	}
-	if p.selected < 0 || p.selected >= len(p.Targets) {
-		err = fmt.Errorf("invalid selection index")
-		return
+	if p.Config.MultiFile { // multi-mode
+		for _, tgt := range p.Targets {
+			msg, smsg, err = DecFile(tgt, filepath.Dir(tgt), pwc, nil, pg)
+			if err != nil {
+				break
+			}
+		}
+	} else { // normal-mode
+		if p.selected < 0 || p.selected >= len(p.Targets) {
+			err = fmt.Errorf("invalid selection index")
+			return
+		}
+		msg, smsg, err = DecFile(p.Targets[p.selected], dst, pwc, nil, pg)
 	}
-	msg, smsg, err = DecFile(p.Targets[p.selected], dst, pwc, nil, pg)
 	fyne.Do(func() { p.msgView.SetText(msg); p.textResult.SetText(smsg) })
 	return
 }
@@ -1739,7 +1796,12 @@ func (p *Page6) Fill() {
 	ent6a := widget.NewEntry()
 	ent6a.SetPlaceHolder("Public message")
 	ent6b := widget.NewEntry()
-	ent6b.SetPlaceHolder("Output name")
+	if p.Config.MultiFile {
+		ent6b.SetPlaceHolder("Disabled (AutoGen)")
+		ent6b.Disable()
+	} else {
+		ent6b.SetPlaceHolder("Output name")
+	}
 	btn6a := widget.NewButtonWithIcon("Encrypt", theme.ViewRestoreIcon(), func() {
 		if p.isWorking {
 			return
@@ -1756,18 +1818,22 @@ func (p *Page6) Fill() {
 		ec.EncType = p.encType
 		ec.Msg = ent6a.Text
 		ec.Smsg = ent0.Text
+		ec.DoPad = p.Config.DoPad
 
 		dst := CleanPath(ent6b.Text)
 		if dst == "" {
 			dst = "output"
 		}
-		var dsts []string
-		if p.Config.JoinInput {
-			dsts = append(dsts, dst)
+		// dsts
+		dsts := make([]string, 0)
+		if p.Config.MultiFile {
+			dsts = append(dsts, p.Targets...)
 		} else {
-			for _, tgt := range p.Targets {
-				dsts = append(dsts, filepath.Base(tgt))
+			dst := CleanPath(ent6b.Text)
+			if dst == "" {
+				dst = "output"
 			}
+			dsts = append(dsts, dst)
 		}
 		for i := range dsts {
 			dsts[i] += "." + ec.ImgType
@@ -1812,7 +1878,7 @@ func (p *Page6) Encrypt(dsts []string, pubc *PubCplx, ec *EncCplx) {
 	copy(tgts, p.Targets)
 	pg := new(Progress)
 	pg.Init(p.Window, p.progbar, &err)
-	if len(tgts) == 0 {
+	if len(tgts) == 0 { // msg-mode
 		var res []byte
 		res, err = EncMsg(nil, pubc, ec, pg)
 		var txtRes string
@@ -1820,15 +1886,15 @@ func (p *Page6) Encrypt(dsts []string, pubc *PubCplx, ec *EncCplx) {
 			txtRes, err = Bencode.Encode64(res, "#", 0, 0)
 		}
 		fyne.Do(func() { p.textResult.SetText(txtRes) })
-	} else if p.Config.JoinInput { // join input files
-		err = EncFiles(tgts, dsts[0], nil, pubc, ec, pg)
-	} else { // separate files
+	} else if p.Config.MultiFile { // multi-mode
 		for i, tgt := range tgts {
 			err = EncFiles([]string{tgt}, dsts[i], nil, pubc, ec, pg)
 			if err != nil {
 				break
 			}
 		}
+	} else { // normal-mode
+		err = EncFiles(tgts, dsts[0], nil, pubc, ec, pg)
 	}
 }
 
@@ -1953,7 +2019,12 @@ func (p *Page7) Fill() {
 	p.msgView = widget.NewEntry()
 	p.msgView.SetPlaceHolder("Public message")
 	ent6 := widget.NewEntry()
-	ent6.SetPlaceHolder("Output name")
+	if p.Config.MultiFile {
+		ent6.SetPlaceHolder("Disabled (AutoGen)")
+		ent6.Disable()
+	} else {
+		ent6.SetPlaceHolder("Output name")
+	}
 	btn6a := widget.NewButtonWithIcon("Decrypt", theme.ViewFullScreenIcon(), func() {
 		if p.isWorking {
 			return
@@ -1970,7 +2041,9 @@ func (p *Page7) Fill() {
 		if dst == "" {
 			dst = "./"
 		}
-		os.MkdirAll(dst, 0644)
+		if !p.Config.MultiFile {
+			os.MkdirAll(dst, 0644)
+		}
 		go p.Decrypt(ent0.Text, dst, pubc)
 	})
 	btn6a.Importance = widget.HighImportance
@@ -2040,11 +2113,20 @@ func (p *Page7) Decrypt(data string, dst string, pubc *PubCplx) {
 		fyne.Do(func() { p.msgView.SetText(msg); p.textResult.SetText(smsg) })
 		return
 	}
-	if p.selected < 0 || p.selected >= len(p.Targets) {
-		err = fmt.Errorf("invalid selection index")
-		return
+	if p.Config.MultiFile { // multi-mode
+		for _, tgt := range p.Targets {
+			msg, smsg, err = DecFile(tgt, filepath.Dir(tgt), nil, pubc, pg)
+			if err != nil {
+				break
+			}
+		}
+	} else { // normal-mode
+		if p.selected < 0 || p.selected >= len(p.Targets) {
+			err = fmt.Errorf("invalid selection index")
+			return
+		}
+		msg, smsg, err = DecFile(p.Targets[p.selected], dst, nil, pubc, pg)
 	}
-	msg, smsg, err = DecFile(p.Targets[p.selected], dst, nil, pubc, pg)
 	fyne.Do(func() { p.msgView.SetText(msg); p.textResult.SetText(smsg) })
 	return
 }
@@ -2367,7 +2449,7 @@ func (p *Page9) Fill() {
 				dialog.ShowError(errors.New("Passwords do not match"), p.Window)
 				return
 			}
-			p.Account.PW, p.Account.KF, p.Account.Msg = ent3a.Text, p.kf, ent3c.Text
+			p.Account.PW, p.Account.KF, p.Account.Msg, p.Account.DoPad = ent3a.Text, p.kf, ent3c.Text, p.Config.DoPad
 			if err := p.Account.Store(); err != nil {
 				dialog.ShowError(err, p.Window)
 				return

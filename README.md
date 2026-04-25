@@ -1,4 +1,4 @@
-# YAS-desktop v1.2.0
+# YAS-desktop v1.3.0
 
 project USAG: Yet Another Security desktop version
 
@@ -11,6 +11,7 @@ project USAG: Yet Another Security desktop version
 | -m | pack, unpack, send, recv, genkey, sign, enc, dec | Sets the working mode. | 작업 모드를 설정합니다. |
 | -o | path | Sets the output path. | 출력 경로를 설정합니다. |
 | -t | text, ip:port/secret | Inputs text, IP address, port, or shared secret. | 텍스트나 IP, 포트, 공유 비밀값을 입력합니다. |
+| -nopad | | Disable opsec padding | 패딩을 비활성화합니다. |
 | -msg | text | Sets the non-secured plaintext message. | 평문 메세지를 설정합니다. |
 | -smsg | text | Sets the secured message. | 보안 메세지를 설정합니다. |
 | -pw | text | Sets the password. | 비밀번호를 설정합니다. |
@@ -57,6 +58,20 @@ Algorithm flags
 - 계정 파일은 Opsec 형식으로 암호화되며 내부에 공개키/개인키 쌍과 키 파일을 보관할 수 있습니다. Account files are encrypted in Opsec format and can store public/private key pairs and key files.
 - 공개키는 변조되지 않는 채널로 공유한다면 노출되어도 괜찮지만, 개인키는 절대 유출되어선 안 됩니다. While public keys can be shared (provided the channel is secure), private keys must never be exposed.
 - 더 안전한 보호를 위해 키 파일의 데이터는 AFT 볼트 안에만 보관하고 TP1 통신으로 받아올 수도 있습니다. For maximum security, store key file data exclusively within AFT vaults and transfer them only via TP1 communication.
+
+#### config
+
+| Option | Type | Info | 정보 |
+| :--- | :--- | :--- | :--- |
+| expire | int | Auto expire time in minutes. (Set 0 to disable auto expire) | 자동 세션 만료 시간. (0으로 설정 시 비활성화) |
+| size | float | Fyne UI Scaling factor | Fyne UI 배율 |
+| limit | int | Memory load size limit | 메모리 로드 크기 제한 |
+| dopad | bool | Enables Opsec padding | Opsec 패딩 활성화 여부 |
+| mulfile | bool | Enable multi-file mode | 다중 파일 모드 여부 |
+| initdir | string | Initial directory (no change if empty) | 초기 디렉토리 (비어있으면 변경하지 않음) |
+| accounts | string[] | Account file paths | 계정 파일 경로 목록 |
+| ips | string[] | IP/port shortcuts | IP/포트 단축 목록 |
+| pubkeys | string:bytes | Public key address book | 공개키 주소록 |
 
 ## Build Executable
 

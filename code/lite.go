@@ -21,6 +21,7 @@ type Config struct {
 	Files     []string        // target files
 	Text      string          // target text or address/secret
 	TypeWords map[string]bool // keyword: webp png bin, zip1 tar1, gcm1 gcmx1, sha3 pbk2 arg2, rsa1 rsa2 ecc1 pqc1
+	NoPad     bool            // disable opsec padding
 
 	PW        string // password
 	KF        []byte //
@@ -39,6 +40,7 @@ func (cfg *Config) Init() {
 	fs.StringVar(&cfg.Mode, "m", "", "work mode: pack, unpack, send, recv, genkey, sign, enc, dec")
 	fs.StringVar(&cfg.Output, "o", "", "output path")
 	fs.StringVar(&cfg.Text, "t", "", "set text input")
+	fs.BoolVar(&cfg.NoPad, "nopad", false, "disable opsec padding")
 
 	// keywords
 	magics := []string{"webp", "png", "bin", "zip1", "tar1", "gcm1", "gcmx1", "sha3", "pbk2", "arg2", "rsa1", "rsa2", "ecc1", "pqc1"}
@@ -151,7 +153,11 @@ func (cfg *Config) ToPubCplx() *PubCplx {
 }
 
 func (cfg *Config) ToEncCplx() *EncCplx {
-	c := &EncCplx{Msg: cfg.Msg, Smsg: cfg.SMsg}
+	c := &EncCplx{
+		Msg:   cfg.Msg,
+		Smsg:  cfg.SMsg,
+		DoPad: !cfg.NoPad,
+	}
 	c.ImgType, c.PackType, c.EncType = "webp", "tar1", "gcmx1" // default
 	switch {
 	case cfg.TypeWords["webp"]:
@@ -259,7 +265,15 @@ func f_send() error {
 		addr += ":8002" // default port
 	}
 	fmt.Print("Sending: ")
-	fromPub, toPub, err := Send(Cfg.Files, Cfg.SMsg, addr, secret, Cfg.ToPwCplx().AlgoType, Cfg.ToPubCplx().AlgoType, new(Progress))
+	nc := &NetCplx{
+		Addr:     addr,
+		Secret:   secret,
+		HashMode: Cfg.ToPwCplx().AlgoType,
+		PubMode:  Cfg.ToPubCplx().AlgoType,
+		DoPad:    !Cfg.NoPad,
+		Pg:       new(Progress),
+	}
+	fromPub, toPub, err := Send(Cfg.Files, Cfg.SMsg, nc)
 	fmt.Printf("[transfer] from %s to %s\n", Opsec.Crc32(fromPub), Opsec.Crc32(toPub))
 	return err
 }
@@ -280,7 +294,13 @@ func f_recv() error {
 		dst = "./"
 	}
 	fmt.Print("Receiving: ")
-	fromPub, toPub, smsg, err := Receive(dst, port, secret, new(Progress))
+	nc := &NetCplx{
+		Addr:   port,
+		Secret: secret,
+		DoPad:  !Cfg.NoPad,
+		Pg:     new(Progress),
+	}
+	fromPub, toPub, smsg, err := Receive(dst, nc)
 	fmt.Printf("[transfer] from %s to %s\n", Opsec.Crc32(fromPub), Opsec.Crc32(toPub))
 	if smsg != "" {
 		fmt.Printf("\n[smsg] %s\n", smsg)
@@ -569,7 +589,7 @@ func main() {
 	default: // help
 		fmt.Println(YAS_VERSION)
 		fmt.Println("-m mode [pack unpack send recv genkey sign enc dec]")
-		fmt.Println("-o outputDir|Path, -t text|ip:port/secret, -msg message, -smsg securedMessage")
+		fmt.Println("-o outputDir|Path, -t text|ip:port/secret, -msg message, -smsg securedMessage -nopad")
 		fmt.Println("-pw password, -kf keyFile, -pub publicKey, -pri privateKey")
 		fmt.Println("options: [webp png bin] [tar1 zip1] [gcmx1 gcm1] [sha3 pbk2 arg2] [rsa1 rsa2 ecc1 pqc1]")
 	}

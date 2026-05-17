@@ -23,17 +23,25 @@ type Config struct {
 	TypeWords map[string]bool // keyword: webp png bin, zip1 tar1, gcm1 gcmx1, sha3 pbk2 arg2, rsa1 rsa2 ecc1 pqc1
 	NoPad     bool            // disable opsec padding
 
-	PW        string // password
+	PW        []byte // password
 	KF        []byte //
 	Public    []byte // public key
 	MyPublic  []byte // my public key
 	MyPrivate []byte // my private key
 	Msg       string // plaintext message
 	SMsg      string // secure message
+
+	mask *Bencrypt.Masker
 }
 
 func (cfg *Config) Init() {
-	defer fmt.Println("configuration completed")
+	crcv_kf := "00000000"
+	crcv_pri := "00000000"
+	defer func() {
+		fmt.Printf("PW: %dB, KF: %dB (%s)\n", len(cfg.PW), len(cfg.KF), crcv_kf)
+		fmt.Printf("Peer Pub: %dB (%s), My Pub: %dB (%s), My Priv: %dB (%s)\n", len(cfg.Public), Opsec.Crc32(cfg.Public), len(cfg.MyPublic), Opsec.Crc32(cfg.MyPublic), len(cfg.MyPrivate), crcv_pri)
+		fmt.Println("configuration completed")
+	}()
 	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 
 	// basic mode and paths
@@ -50,13 +58,11 @@ func (cfg *Config) Init() {
 	}
 
 	// authorization and security
-	fs.StringVar(&cfg.PW, "pw", "", "password")
+	tempPW, kfpath := "", ""
+	fs.StringVar(&tempPW, "pw", "", "password")
+	fs.StringVar(&kfpath, "kf", "", "key file path")
 	fs.StringVar(&cfg.Msg, "msg", "", "non-secured message")
 	fs.StringVar(&cfg.SMsg, "smsg", "", "secured message")
-
-	// get keyfile
-	kfpath := ""
-	fs.StringVar(&kfpath, "kf", "", "key file path")
 
 	// get public & private key
 	pub, mypub, mypri := "", "", ""
@@ -76,20 +82,33 @@ func (cfg *Config) Init() {
 		}
 	}
 
-	// set keyfile
+	// mask password
+	cfg.mask = Bencrypt.GetMasker(-1)
+	var err error
+	cfg.PW, err = cfg.mask.XOR(Bencode.NormPW(tempPW))
+	if err != nil {
+		fmt.Printf("[ERROR] %v\n", err)
+	}
+	tempPW = ""
+
+	// mask keyfile
+	var key []byte
+	defer func() { clear(key) }()
 	if kfpath == "" {
-		cfg.KF = nil
+		key = nil
 	} else if _, err := os.Stat(kfpath); err == nil { // file
-		fmt.Println("reading keyfile")
-		cfg.KF, err = os.ReadFile(kfpath)
+		key, err = os.ReadFile(kfpath)
 		if err != nil {
-			fmt.Println(err)
-			cfg.KF = nil
+			fmt.Printf("[ERROR] %v\n", err)
 		}
 	}
-	if len(cfg.KF) > 1024 {
-		fmt.Println("keyfile is truncated to 1024B")
-		cfg.KF = cfg.KF[:1024]
+	if len(key) > 4096 {
+		key = key[:4096]
+	}
+	crcv_kf = Opsec.Crc32(key)
+	cfg.KF, err = cfg.mask.XOR(key)
+	if err != nil {
+		fmt.Printf("[ERROR] %v\n", err)
 	}
 
 	// set public & private key
@@ -119,7 +138,14 @@ func (cfg *Config) Init() {
 			return nil
 		}
 	}
-	cfg.Public, cfg.MyPublic, cfg.MyPrivate = preader(pub), preader(mypub), preader(mypri)
+	var priv []byte
+	defer func() { clear(priv) }()
+	cfg.Public, cfg.MyPublic, priv = preader(pub), preader(mypub), preader(mypri)
+	crcv_pri = Opsec.Crc32(priv)
+	cfg.MyPrivate, err = cfg.mask.XOR(priv)
+	if err != nil {
+		fmt.Printf("[ERROR] %v\n", err)
+	}
 }
 
 func (cfg *Config) ToPwCplx() *PwCplx {
@@ -251,14 +277,17 @@ func f_unpack() error {
 }
 
 func f_send() error {
-	addr, secret := "127.0.0.1", ""
+	addr := "127.0.0.1"
+	var secret []byte
+	defer func() { clear(secret) }()
 	if Cfg.Text != "" {
 		parts := strings.Split(Cfg.Text, "/")
 		if parts[0] != "" {
 			addr = parts[0]
 		}
 		if len(parts) > 1 {
-			secret = parts[1]
+			mask := Bencrypt.GetMasker(-1)
+			secret, _ = mask.XOR(Bencode.NormPW(parts[1]))
 		}
 	}
 	if !strings.Contains(addr, ":") {
@@ -279,14 +308,17 @@ func f_send() error {
 }
 
 func f_recv() error {
-	port, secret := "8002", ""
+	port := "8002"
+	var secret []byte
+	defer func() { clear(secret) }()
 	if Cfg.Text != "" {
 		parts := strings.Split(Cfg.Text, "/")
 		if parts[0] != "" {
 			port = parts[0]
 		}
 		if len(parts) > 1 {
-			secret = parts[1]
+			mask := Bencrypt.GetMasker(-1)
+			secret, _ = mask.XOR(Bencode.NormPW(parts[1]))
 		}
 	}
 	dst := Cfg.Output
@@ -329,6 +361,7 @@ func f_genkey() error {
 	if err == nil {
 		var bpub, bpri []byte
 		bpub, bpri, err = am.Genkey()
+		defer clear(bpri)
 		if err == nil {
 			pub, err = Bencode.Encode64(bpub, "#", 80, 10)
 		}
@@ -351,8 +384,12 @@ func f_genkey() error {
 }
 
 func f_sign() error {
+	mask := Bencrypt.GetMasker(-1)
+	priv, _ := mask.XOR(Cfg.MyPrivate)
+	defer clear(priv)
+
 	// make sign
-	if Cfg.MyPrivate != nil {
+	if priv != nil {
 		if len(Cfg.Files) == 0 {
 			return errors.New("no file to sign")
 		}
@@ -364,7 +401,7 @@ func f_sign() error {
 		if err := am.Init(Cfg.ToPubCplx().AlgoType); err != nil {
 			return err
 		}
-		if err := am.Loadkey(nil, Cfg.MyPrivate); err != nil {
+		if err := am.Loadkey(nil, priv); err != nil {
 			return err
 		}
 		fmt.Println("Private key loaded")
@@ -378,7 +415,7 @@ func f_sign() error {
 			if info.IsDir() {
 				return fmt.Errorf("file %s is directory", f)
 			}
-			if info.Size() > 512*1048576 { // 512MB limit
+			if info.Size() > LIMIT_BIG {
 				return fmt.Errorf("file %s is too large", f)
 			}
 			data, err := os.ReadFile(f)

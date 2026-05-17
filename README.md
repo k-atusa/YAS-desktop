@@ -1,4 +1,4 @@
-# YAS-desktop v1.3.0
+# YAS-desktop v1.4.0
 
 project USAG: Yet Another Security desktop version
 
@@ -95,14 +95,14 @@ windows gui
 ```bat
 go mod init example.com
 go mod tidy
-go build -ldflags="-H windowsgui -s -w" -trimpath -o yas.exe TP1.go GUIext.go YAScore.go main.go
+go build -ldflags="-H windowsgui -s -w" -trimpath -o yas.exe TP1.go GUIext.go MemView.go YAScore.go main.go
 ```
 
 linux/mac gui
 ```bash
 go mod init example.com
 go mod tidy
-go build -ldflags="-s -w" -trimpath -o yas TP1.go GUIext.go YAScore.go main.go
+go build -ldflags="-s -w" -trimpath -o yas TP1.go GUIext.go MemView.go YAScore.go main.go
 ```
 
 fyne2 GUI requires C compiler and X11 environment. Selection dialog requires Zenity. check and install following packages before build.

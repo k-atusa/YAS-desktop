@@ -1,5 +1,4 @@
-// test800 : project USAG GUI extension R6
-// Fyne 2.7 has bug that can't render korean. Use v2.6.3 on Windows. See github.com/fyne-io/fyne/issues/6146
+// test800 : project USAG GUI extension R7
 package main
 
 import (
@@ -18,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/k-atusa/USAG-Lib/Bencode"
+	"github.com/k-atusa/USAG-Lib/Bencrypt"
 	"github.com/k-atusa/USAG-Lib/Opsec"
 	"github.com/ncruces/zenity"
 )
@@ -33,6 +33,12 @@ func (m U1Theme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) colo
 			return color.White
 		}
 		return color.Black
+	}
+	if name == theme.ColorNameDisabled { // disabled text color
+		if variant == theme.VariantDark {
+			return color.RGBA{R: 200, G: 200, B: 200, A: 255}
+		}
+		return color.RGBA{R: 80, G: 80, B: 80, A: 255}
 	}
 	return theme.DefaultTheme().Color(name, variant)
 }
@@ -97,7 +103,7 @@ func ZenityFolder(title string) (res string, err error) {
 }
 
 // ===== keyfile, keypair =====
-func SelectKF(lbl *widget.Label, keyPtr *[]byte) {
+func SelectKF(lbl *widget.Label, keyPtr *[]byte, mask *Bencrypt.Masker) {
 	var data []byte = nil
 	name := "keyfile not selected"
 
@@ -111,19 +117,25 @@ func SelectKF(lbl *widget.Label, keyPtr *[]byte) {
 		}
 	}
 
-	// 2. Read file (max 1024 bytes)
+	// 2. Read file (max 4096 bytes)
 	if err == nil {
-		buf := make([]byte, 1024)
+		buf := make([]byte, 4096)
 		n, _ := io.ReadFull(f, buf)
 		data, name = buf[:n], filepath.Base(path)
 	}
 
-	// 2. Set Data & Update UI
+	// 3. Mask data, Update UI
+	crcv := Opsec.Crc32(data)
+	if mask != nil {
+		temp, _ := mask.XOR(data)
+		clear(data)
+		data = temp
+	}
 	*keyPtr = data
-	lbl.SetText(fmt.Sprintf("[%dB, %s] %s", len(data), Opsec.Crc32(data), name))
+	lbl.SetText(fmt.Sprintf("[%dB, %s] %s", len(data), crcv, name))
 }
 
-func ReceiveKF(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr *[]byte) {
+func ReceiveKF(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr *[]byte, mask *Bencrypt.Masker) {
 	// 1. Get IP Address
 	ips, err := GetIPs(true)
 	if err != nil {
@@ -131,14 +143,15 @@ func ReceiveKF(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr *
 		return
 	}
 	port := "8001"
-	secret := ""
+	var secret []byte
 	if portEnt.Text != "" {
 		parts := strings.Split(portEnt.Text, "/")
 		if parts[0] != "" {
 			port = parts[0]
 		}
 		if len(parts) > 1 {
-			secret = parts[1]
+			secret = Bencode.NormPW(parts[1])
+			portEnt.SetText(parts[0] + "/") // remove secret
 		}
 	}
 	for i, r := range ips {
@@ -165,7 +178,9 @@ func ReceiveKF(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr *
 
 		// 2-2. Accept Connection
 		tp := new(TP1)
+		defer func() { clear(tp.SharedS) }()
 		tp.Init(0, true, true, secret, sock.Conn) // receiver does not need to set mode
+		clear(secret)
 		buf := new(bytes.Buffer)
 		fromPub, toPub, _, err := tp.Receive(buf)
 		data := buf.Bytes()
@@ -174,24 +189,36 @@ func ReceiveKF(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr *
 			return
 		}
 
-		// 3. Update UI
+		// 3. Mask data, Update UI
+		crcv := Opsec.Crc32(data)
+		if mask != nil {
+			temp, _ := mask.XOR(data)
+			clear(data)
+			data = temp
+		}
 		fyne.Do(func() {
 			*keyPtr = data
-			lbl.SetText(fmt.Sprintf("[%dB, %s] from %s to %s", len(data), Opsec.Crc32(data), Opsec.Crc32(fromPub), Opsec.Crc32(toPub)))
+			lbl.SetText(fmt.Sprintf("[%dB, %s] from %s to %s", len(data), crcv, Opsec.Crc32(fromPub), Opsec.Crc32(toPub)))
 		})
 	}()
 }
 
-func ChooseKF(lbl *widget.Label, keyPtr *[]byte, sel string, mp map[string][]byte) {
+func ChooseKF(lbl *widget.Label, keyPtr *[]byte, sel string, mp map[string][]byte, mask *Bencrypt.Masker) {
 	data, ok := mp[sel]
 	if !ok {
 		return
 	}
-	*keyPtr = data
-	lbl.SetText(fmt.Sprintf("[%dB, %s] %s", len(data), Opsec.Crc32(data), sel))
+	crcv := Opsec.Crc32(data)
+	if mask != nil {
+		temp, _ := mask.XOR(data)
+		crcv = Opsec.Crc32(temp)
+		clear(temp)
+	}
+	*keyPtr = data // if mask is enabled, map data is already masked
+	lbl.SetText(fmt.Sprintf("[%dB, %s] %s", len(data), crcv, sel))
 }
 
-func SelectPub(lbl *widget.Label, keyPtr *[]byte, basic []byte) {
+func SelectPub(lbl *widget.Label, keyPtr *[]byte, basic []byte, mask *Bencrypt.Masker) {
 	var data []byte = basic
 	name := "default"
 
@@ -223,12 +250,18 @@ func SelectPub(lbl *widget.Label, keyPtr *[]byte, basic []byte) {
 		name = fmt.Sprintf("default (%.20s)", err.Error())
 	}
 
-	// 2. Set Data & Update UI
+	// 3. Mask data, Update UI
+	crcv := Opsec.Crc32(data)
+	if mask != nil {
+		temp, _ := mask.XOR(data)
+		clear(data)
+		data = temp
+	}
 	*keyPtr = data
-	lbl.SetText(fmt.Sprintf("[%dB, %s] %s", len(data), Opsec.Crc32(data), name))
+	lbl.SetText(fmt.Sprintf("[%dB, %s] %s", len(data), crcv, name))
 }
 
-func ReceivePub(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr *[]byte) {
+func ReceivePub(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr *[]byte, mask *Bencrypt.Masker) {
 	// 1. Get IP Address
 	ips, err := GetIPs(true)
 	if err != nil {
@@ -236,14 +269,15 @@ func ReceivePub(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr 
 		return
 	}
 	port := "8001"
-	secret := ""
+	var secret []byte // slice ownership goes inside TP1
 	if portEnt.Text != "" {
 		parts := strings.Split(portEnt.Text, "/")
 		if parts[0] != "" {
 			port = parts[0]
 		}
 		if len(parts) > 1 {
-			secret = parts[1]
+			secret = Bencode.NormPW(parts[1])
+			portEnt.SetText(parts[0] + "/") // remove secret
 		}
 	}
 	for i, r := range ips {
@@ -270,7 +304,9 @@ func ReceivePub(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr 
 
 		// 2-2. Accept Connection
 		tp := new(TP1)
+		defer func() { clear(tp.SharedS) }()
 		tp.Init(0, true, true, secret, sock.Conn) // receiver does not need to set mode
+		clear(secret)
 		buf := new(bytes.Buffer)
 		fromPub, toPub, _, err := tp.Receive(buf)
 		data := buf.Bytes()
@@ -290,10 +326,16 @@ func ReceivePub(w fyne.Window, lbl *widget.Label, portEnt *widget.Entry, keyPtr 
 			return
 		}
 
-		// 4. Update UI
+		// 4. Mask data, Update UI
+		crcv := Opsec.Crc32(data)
+		if mask != nil {
+			temp, _ := mask.XOR(data)
+			clear(data)
+			data = temp
+		}
 		fyne.Do(func() {
 			*keyPtr = data
-			lbl.SetText(fmt.Sprintf("[%dB, %s] from %s to %s", len(data), Opsec.Crc32(data), Opsec.Crc32(fromPub), Opsec.Crc32(toPub)))
+			lbl.SetText(fmt.Sprintf("[%dB, %s] from %s to %s", len(data), crcv, Opsec.Crc32(fromPub), Opsec.Crc32(toPub)))
 		})
 	}()
 }

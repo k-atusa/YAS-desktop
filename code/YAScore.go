@@ -15,7 +15,9 @@ import (
 	"github.com/k-atusa/USAG-Lib/Szip"
 )
 
-var YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.3.0"
+const YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.4.0"
+const LIMIT_BIG int64 = 512 * 1048576
+const LIMIT_IMAGE int64 = 16 * 1048576
 
 // abstract status indicator
 type ProgStatus interface {
@@ -53,7 +55,7 @@ func GetPrehead(tp string, img string, ismsg bool) []byte {
 // password complex
 type PwCplx struct {
 	AlgoType string // sha3, pbk2, arg2
-	PW       string
+	PW       []byte
 	KF       []byte
 }
 
@@ -108,9 +110,21 @@ func Unpack(src string, dst string, tp string) error {
 	}
 }
 
+// unpack files to memory
+func UnpackMem(src []byte, tp string) (map[string][]byte, error) {
+	switch tp {
+	case "zip1":
+		return Szip.UnpackMem(src, LIMIT_IMAGE)
+	case "tar1":
+		return Star.UnpackMem(src, LIMIT_IMAGE)
+	default:
+		return nil, errors.New("unsupported pack type")
+	}
+}
+
 type NetCplx struct {
 	Addr   string // ip:port, port
-	Secret string
+	Secret []byte
 
 	HashMode string // sha3, pbk2, arg2
 	PubMode  string // rsa1, rsa2, ecc1, pqc1
@@ -146,6 +160,7 @@ func Send(srcs []string, smsg string, netc *NetCplx) ([]byte, []byte, error) {
 
 	// 3. accept connection
 	tp := new(TP1)
+	defer func() { clear(tp.SharedS) }()
 	var con uint16 = SYM_GCMX1
 	if len(srcs) == 0 {
 		con += MODE_MSGONLY
@@ -168,7 +183,10 @@ func Send(srcs []string, smsg string, netc *NetCplx) ([]byte, []byte, error) {
 	case "pqc1":
 		con += ASYM_PQC1
 	}
-	tp.Init(con, false, netc.DoPad, netc.Secret, sock.Conn)
+	mask := Bencrypt.GetMasker(-1)
+	shs, _ := mask.XOR(netc.Secret)
+	defer clear(shs)
+	tp.Init(con, false, netc.DoPad, shs, sock.Conn)
 	netc.Pg.OnUpdate(0.2) // connecting is 10%
 
 	// 4. open packed file
@@ -236,8 +254,12 @@ func Receive(dst string, netc *NetCplx) ([]byte, []byte, string, error) {
 
 	// 2. accept connection, set temp path
 	tp := new(TP1)
-	tp.Init(0, false, netc.DoPad, netc.Secret, sock.Conn) // listener does not set mode
-	netc.Pg.OnUpdate(0.1)                                 // connecting is 10%
+	defer func() { clear(tp.SharedS) }()
+	mask := Bencrypt.GetMasker(-1)
+	shs, _ := mask.XOR(netc.Secret)
+	defer clear(shs)
+	tp.Init(0, false, netc.DoPad, shs, sock.Conn) // listener does not set mode
+	netc.Pg.OnUpdate(0.1)                         // connecting is 10%
 	zipPath := TempPath()
 	defer DelPath(zipPath)
 	f, err := os.Create(zipPath)
@@ -298,14 +320,22 @@ func Receive(dst string, netc *NetCplx) ([]byte, []byte, string, error) {
 func EncMsg(pwc *PwCplx, pubc *PubCplx, cfg *EncCplx, pg ProgStatus) ([]byte, error) {
 	pg.OnStart()
 	ops := new(Opsec.Opsec)
+	defer func() { clear(ops.BodyKey) }()
 	ops.Reset()
 	ops.Msg, ops.Smsg = cfg.Msg, cfg.Smsg
 	var header []byte
 	var err error
+	mask := Bencrypt.GetMasker(-1)
 	if pwc != nil {
-		header, err = ops.Encpw(pwc.AlgoType, []byte(pwc.PW), pwc.KF)
+		pw, _ := mask.XOR(pwc.PW)
+		defer clear(pw)
+		kf, _ := mask.XOR(pwc.KF)
+		defer clear(kf)
+		header, err = ops.Encpw(pwc.AlgoType, pw, kf)
 	} else if pubc != nil {
-		header, err = ops.Encpub(pubc.AlgoType, pubc.PeerPub, pubc.MyPri)
+		priv, _ := mask.XOR(pubc.MyPri)
+		defer clear(priv)
+		header, err = ops.Encpub(pubc.AlgoType, pubc.PeerPub, priv)
 	} else {
 		return nil, errors.New("no password or public key")
 	}
@@ -327,6 +357,7 @@ func EncMsg(pwc *PwCplx, pubc *PubCplx, cfg *EncCplx, pg ProgStatus) ([]byte, er
 func DecMsg(data []byte, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) (string, string, error) {
 	pg.OnStart()
 	ops := new(Opsec.Opsec)
+	defer func() { clear(ops.BodyKey) }()
 	ops.Reset()
 	header, err := ops.Read(bytes.NewBuffer(data), 0)
 	if err != nil {
@@ -334,10 +365,17 @@ func DecMsg(data []byte, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) (string, str
 		return "", "", err
 	}
 	ops.View(header)
+	mask := Bencrypt.GetMasker(-1)
 	if pwc != nil {
-		err = ops.Decpw([]byte(pwc.PW), pwc.KF)
+		pw, _ := mask.XOR(pwc.PW)
+		defer clear(pw)
+		kf, _ := mask.XOR(pwc.KF)
+		defer clear(kf)
+		err = ops.Decpw(pw, kf)
 	} else if pubc != nil {
-		err = ops.Decpub(pubc.MyPri, pubc.MyPub, pubc.PeerPub)
+		priv, _ := mask.XOR(pubc.MyPri)
+		defer clear(priv)
+		err = ops.Decpub(priv, pubc.MyPub, pubc.PeerPub)
 	} else {
 		return ops.Msg, "", errors.New("no password or public key")
 	}
@@ -356,15 +394,7 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 	pg.OnStart()
 	zipPath := TempPath()
 	defer DelPath(zipPath)
-	var err error
-	switch cfg.PackType {
-	case "zip1":
-		err = Szip.Pack(srcs, zipPath)
-	case "tar1":
-		err = Star.Pack(srcs, zipPath)
-	default:
-		err = errors.New("unsupported pack type")
-	}
+	err := Pack(srcs, zipPath, cfg.PackType)
 	if err != nil {
 		pg.OnError(err)
 		return err
@@ -373,6 +403,7 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 
 	// 2. make worker, get size
 	sm := new(Bencrypt.SymMaster)
+	defer func() { clear(sm.Key) }()
 	if err := sm.Init(cfg.EncType, make([]byte, 44)); err != nil {
 		pg.OnError(err)
 		return err
@@ -387,16 +418,24 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 
 	// 3. make header
 	ops := new(Opsec.Opsec)
+	defer func() { clear(ops.BodyKey) }()
 	ops.Reset()
 	ops.Msg, ops.Smsg = cfg.Msg, cfg.Smsg
 	ops.BodySize, ops.BodyAlgo, ops.BodyInfo = asize, cfg.EncType, []byte(cfg.PackType)
 	var prehead, header []byte
+	mask := Bencrypt.GetMasker(-1)
 	if pwc != nil {
 		prehead = GetPrehead("pw", cfg.ImgType, false)
-		header, err = ops.Encpw(pwc.AlgoType, []byte(pwc.PW), pwc.KF)
+		pw, _ := mask.XOR(pwc.PW)
+		defer clear(pw)
+		kf, _ := mask.XOR(pwc.KF)
+		defer clear(kf)
+		header, err = ops.Encpw(pwc.AlgoType, pw, kf)
 	} else if pubc != nil {
 		prehead = GetPrehead("pub", cfg.ImgType, false)
-		header, err = ops.Encpub(pubc.AlgoType, pubc.PeerPub, pubc.MyPri)
+		priv, _ := mask.XOR(pubc.MyPri)
+		defer clear(priv)
+		header, err = ops.Encpub(pubc.AlgoType, pubc.PeerPub, priv)
 	} else {
 		return errors.New("no password or public key")
 	}
@@ -489,6 +528,7 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) 
 	}
 	defer f.Close()
 	ops := new(Opsec.Opsec)
+	defer func() { clear(ops.BodyKey) }()
 	ops.Reset()
 	header, err := ops.Read(f, 0)
 	if err != nil {
@@ -498,10 +538,17 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) 
 
 	// 2. decrypt header
 	ops.View(header)
+	mask := Bencrypt.GetMasker(-1)
 	if pwc != nil {
-		err = ops.Decpw([]byte(pwc.PW), pwc.KF)
+		pw, _ := mask.XOR(pwc.PW)
+		defer clear(pw)
+		kf, _ := mask.XOR(pwc.KF)
+		defer clear(kf)
+		err = ops.Decpw(pw, kf)
 	} else if pubc != nil {
-		err = ops.Decpub(pubc.MyPri, pubc.MyPub, pubc.PeerPub)
+		priv, _ := mask.XOR(pubc.MyPri)
+		defer clear(priv)
+		err = ops.Decpub(priv, pubc.MyPub, pubc.PeerPub)
 	} else {
 		return ops.Msg, "", errors.New("no password or public key")
 	}
@@ -521,6 +568,7 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) 
 	}
 	defer zf.Close()
 	sm := new(Bencrypt.SymMaster)
+	defer func() { clear(sm.Key) }()
 	if err := sm.Init(ops.BodyAlgo, ops.BodyKey); err != nil {
 		pg.OnError(err)
 		return ops.Msg, ops.Smsg, err
@@ -553,19 +601,116 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) 
 	}
 
 	// 5. unpack
-	switch string(ops.BodyInfo) {
-	case "zip1":
-		zf.Close()
-		err = Szip.Unpack(zipPath, dst)
-	case "tar1":
-		zf.Close()
-		err = Star.Unpack(zipPath, dst)
-	} // default: no unpack
-	if err == nil {
+	if len(ops.BodyInfo) == 0 {
 		pg.OnEnd()
 		return ops.Msg, ops.Smsg, nil
-	} else {
+	}
+	if err = Unpack(zipPath, dst, string(ops.BodyInfo)); err != nil {
 		pg.OnError(err)
 		return ops.Msg, ops.Smsg, err
+	} else {
+		pg.OnEnd()
+		return ops.Msg, ops.Smsg, nil
 	}
+}
+
+// decrypt file on memory
+func DecFileMem(src string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) (string, string, map[string][]byte, error) {
+	// 1. read header
+	pg.OnStart()
+	stat, err := os.Stat(src)
+	if err != nil {
+		pg.OnError(err)
+		return "", "", nil, err
+	}
+	if stat.Size() > LIMIT_BIG {
+		pg.OnError(errors.New("file size is too large"))
+		return "", "", nil, err
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		pg.OnError(err)
+		return "", "", nil, err
+	}
+	defer f.Close()
+	ops := new(Opsec.Opsec)
+	defer func() { clear(ops.BodyKey) }()
+	ops.Reset()
+	header, err := ops.Read(f, 0)
+	if err != nil {
+		pg.OnError(err)
+		return "", "", nil, err
+	}
+
+	// 2. decrypt header
+	ops.View(header)
+	mask := Bencrypt.GetMasker(-1)
+	if pwc != nil {
+		pw, _ := mask.XOR(pwc.PW)
+		defer clear(pw)
+		kf, _ := mask.XOR(pwc.KF)
+		defer clear(kf)
+		err = ops.Decpw(pw, kf)
+	} else if pubc != nil {
+		priv, _ := mask.XOR(pubc.MyPri)
+		defer clear(priv)
+		err = ops.Decpub(priv, pubc.MyPub, pubc.PeerPub)
+	} else {
+		return ops.Msg, "", nil, errors.New("no password or public key")
+	}
+	if err != nil {
+		pg.OnError(err)
+		return ops.Msg, "", nil, err
+	}
+	pg.OnUpdate(0.1) // header is 10%
+
+	// 3. prepare worker
+	sm := new(Bencrypt.SymMaster)
+	defer func() { clear(sm.Key) }()
+	if err := sm.Init(ops.BodyAlgo, ops.BodyKey); err != nil {
+		pg.OnError(err)
+		return ops.Msg, ops.Smsg, nil, err
+	}
+	t := bytes.NewBuffer(make([]byte, 0, ops.BodySize))
+
+	// 4. decrypt
+	stop := make(chan bool, 1)
+	done := make(chan bool, 1)
+	go func() {
+		defer func() { done <- true }()
+		ticker := time.NewTicker(100 * time.Millisecond) // check every 100ms
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				sent := sm.Processed()
+				pg.OnUpdate(0.1 + 0.8*float64(sent)/float64(ops.BodySize))
+			}
+		}
+	}()
+	err = sm.DeFile(f, ops.BodySize, t)
+	stop <- true
+	<-done
+	pg.OnUpdate(0.9)
+	if err != nil {
+		pg.OnError(err)
+		return ops.Msg, ops.Smsg, nil, err
+	}
+
+	// 5. unpack
+	if len(ops.BodyInfo) == 0 {
+		pg.OnEnd()
+		m := make(map[string][]byte)
+		m[""] = t.Bytes()
+		return ops.Msg, ops.Smsg, m, nil
+	}
+	m, err := UnpackMem(t.Bytes(), string(ops.BodyInfo))
+	if err != nil {
+		pg.OnError(err)
+		return ops.Msg, ops.Smsg, nil, err
+	}
+	pg.OnEnd()
+	return ops.Msg, ops.Smsg, m, nil
 }

@@ -85,7 +85,9 @@ func (cfg *Config) Init() {
 	// mask password
 	cfg.mask = Bencrypt.GetMasker(-1)
 	var err error
-	cfg.PW, err = cfg.mask.XOR(Bencode.NormPW(tempPW))
+	pwb := Bencode.NormPW(tempPW)
+	defer clear(pwb)
+	cfg.PW, err = cfg.mask.XOR(pwb)
 	if err != nil {
 		fmt.Printf("[ERROR] %v\n", err)
 	}

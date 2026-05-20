@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -149,6 +150,7 @@ func (a *Account) Load() error {
 	defer func() {
 		o.Smsg = ""
 		sclear(o.BodyKey)
+		sclear(o.SmsgInfo)
 	}()
 	o.Reset()
 	header, err := o.Read(f, 0)
@@ -167,22 +169,17 @@ func (a *Account) Load() error {
 		return err
 	}
 
-	// 3. restore key from smsg
-	parts := strings.Split(o.Smsg, "\n")
-	if len(parts) != 3 {
-		return errors.New("invalid account format")
-	}
-	a.KeyType = parts[0]
-	a.PubKey, err = Bencode.Decode64(parts[1], "") // pure base64
-	if err != nil {
-		return err
-	}
-	var priv []byte
-	defer func() { sclear(priv) }()
-	priv, err = Bencode.Decode64(parts[2], "") // pure base64
-	parts[2] = ""
-	if err == nil {
-		a.PriKey, err = a.Mask.XOR(priv)
+	// 3. restore key from smsginfo
+	for name, data := range Opsec.DecodeCfg(o.SmsgInfo) {
+		switch name {
+		case "keytype":
+			a.KeyType = string(data)
+		case "public":
+			a.PubKey = bytes.Clone(data)
+		case "private":
+			a.PriKey, err = a.Mask.XOR(data) // mask private
+		}
+		sclear(data)
 	}
 	if err != nil {
 		return err
@@ -227,21 +224,31 @@ func (a *Account) Store() error {
 	if err != nil {
 		return err
 	}
-	smsg := strings.Join([]string{a.KeyType, Bencode.Encode64h(a.PubKey), Bencode.Encode64h(priv)}, "\n")
-	tempKF := make(map[string][]byte)
+	tm := make(map[string][]byte)
+	tm["keytype"] = []byte(a.KeyType)
+	tm["public"] = a.PubKey
+	tm["private"] = priv
+	smsgi, err := Opsec.EncodeCfg(tm)
+	defer sclear(smsgi)
+	if err != nil {
+		return err
+	}
+
+	clear(tm)
 	defer func() {
-		for _, v := range tempKF {
+		for _, v := range tm {
 			sclear(v)
 		}
-		tempKF = nil
+		clear(tm)
 	}()
+
 	for name, data := range a.KeyFiles {
-		tempKF[name], err = a.Mask.XOR(data)
+		tm[name], err = a.Mask.XOR(data)
 		if err != nil {
 			return err
 		}
 	}
-	plainkf, err := Opsec.EncodeCfg(tempKF)
+	plainkf, err := Opsec.EncodeCfg(tm)
 	defer sclear(plainkf)
 	if err != nil {
 		return err
@@ -257,9 +264,10 @@ func (a *Account) Store() error {
 	defer func() {
 		o.Smsg = ""
 		sclear(o.BodyKey)
+		sclear(o.SmsgInfo)
 	}()
 	o.Reset()
-	o.Msg, o.Smsg, o.BodySize, o.BodyAlgo = a.Msg, smsg, sm.AfterSize(int64(len(plainkf))), sm.Algo
+	o.Msg, o.SmsgInfo, o.BodySize, o.BodyAlgo = a.Msg, smsgi, sm.AfterSize(int64(len(plainkf))), sm.Algo
 	var header []byte
 	pw, _ := a.Mask.XOR(a.PW)
 	defer sclear(pw)

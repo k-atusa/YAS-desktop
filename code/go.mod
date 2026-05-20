@@ -4,9 +4,8 @@ go 1.26.3
 
 require (
 	fyne.io/fyne/v2 v2.7.4
-	github.com/k-atusa/USAG-Lib v1.4.4
-	github.com/ncruces/zenity v0.10.14
-	golang.org/x/image v0.24.0
+	github.com/k-atusa/USAG-Lib v1.4.7
+	github.com/taewook427/USAG-KOX v1.0.2
 )
 
 require (
@@ -34,6 +33,7 @@ require (
 	github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-runewidth v0.0.17 // indirect
+	github.com/ncruces/zenity v0.10.14 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/nicksnyder/go-i18n/v2 v2.5.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -45,6 +45,7 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/yuin/goldmark v1.7.8 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/image v0.40.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

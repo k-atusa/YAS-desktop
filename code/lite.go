@@ -23,11 +23,11 @@ type Config struct {
 	TypeWords map[string]bool // keyword: webp png bin, zip1 tar1, gcm1 gcmx1, sha3 pbk2 arg2, rsa1 rsa2 ecc1 pqc1
 	NoPad     bool            // disable opsec padding
 
-	PW        []byte // password
-	KF        []byte //
+	PW        []byte // masked password
+	KF        []byte // masked key file
 	Public    []byte // public key
 	MyPublic  []byte // my public key
-	MyPrivate []byte // my private key
+	MyPrivate []byte // masked my private key
 	Msg       string // plaintext message
 	SMsg      string // secure message
 
@@ -86,7 +86,7 @@ func (cfg *Config) Init() {
 	cfg.mask = Bencrypt.GetMasker(-1)
 	var err error
 	pwb := Bencode.NormPW(tempPW)
-	defer clear(pwb)
+	defer sclear(pwb)
 	cfg.PW, err = cfg.mask.XOR(pwb)
 	if err != nil {
 		fmt.Printf("[ERROR] %v\n", err)
@@ -95,7 +95,7 @@ func (cfg *Config) Init() {
 
 	// mask keyfile
 	var key []byte
-	defer func() { clear(key) }()
+	defer func() { sclear(key) }()
 	if kfpath == "" {
 		key = nil
 	} else if _, err := os.Stat(kfpath); err == nil { // file
@@ -141,7 +141,7 @@ func (cfg *Config) Init() {
 		}
 	}
 	var priv []byte
-	defer func() { clear(priv) }()
+	defer func() { sclear(priv) }()
 	cfg.Public, cfg.MyPublic, priv = preader(pub), preader(mypub), preader(mypri)
 	crcv_pri = Opsec.Crc32(priv)
 	cfg.MyPrivate, err = cfg.mask.XOR(priv)
@@ -281,7 +281,7 @@ func f_unpack() error {
 func f_send() error {
 	addr := "127.0.0.1"
 	var secret []byte
-	defer func() { clear(secret) }()
+	defer func() { sclear(secret) }()
 	if Cfg.Text != "" {
 		parts := strings.Split(Cfg.Text, "/")
 		if parts[0] != "" {
@@ -312,7 +312,7 @@ func f_send() error {
 func f_recv() error {
 	port := "8002"
 	var secret []byte
-	defer func() { clear(secret) }()
+	defer func() { sclear(secret) }()
 	if Cfg.Text != "" {
 		parts := strings.Split(Cfg.Text, "/")
 		if parts[0] != "" {
@@ -363,7 +363,7 @@ func f_genkey() error {
 	if err == nil {
 		var bpub, bpri []byte
 		bpub, bpri, err = am.Genkey()
-		defer clear(bpri)
+		defer sclear(bpri)
 		if err == nil {
 			pub, err = Bencode.Encode64(bpub, "#", 80, 10)
 		}
@@ -388,7 +388,7 @@ func f_genkey() error {
 func f_sign() error {
 	mask := Bencrypt.GetMasker(-1)
 	priv, _ := mask.XOR(Cfg.MyPrivate)
-	defer clear(priv)
+	defer sclear(priv)
 
 	// make sign
 	if priv != nil {

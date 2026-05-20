@@ -65,9 +65,7 @@ Algorithm flags
 | :--- | :--- | :--- | :--- |
 | expire | int | Auto expire time in minutes. (Set 0 to disable auto expire) | 자동 세션 만료 시간. (0으로 설정 시 비활성화) |
 | size | float | Fyne UI Scaling factor | Fyne UI 배율 |
-| limit | int | Memory load size limit | 메모리 로드 크기 제한 |
 | dopad | bool | Enables Opsec padding | Opsec 패딩 활성화 여부 |
-| mulfile | bool | Enable multi-file mode | 다중 파일 모드 여부 |
 | initdir | string | Initial directory (no change if empty) | 초기 디렉토리 (비어있으면 변경하지 않음) |
 | accounts | string[] | Account file paths | 계정 파일 경로 목록 |
 | ips | string[] | IP/port shortcuts | IP/포트 단축 목록 |
@@ -81,28 +79,28 @@ windows cli
 ```bat
 go mod init example.com
 go mod tidy
-go build -ldflags="-s -w" -trimpath -o yas-lite.exe TP1.go YAScore.go lite.go
+go build -ldflags="-s -w" -trimpath -o yas-lite.exe core.go lite.go
 ```
 
 linux/mac cli
 ```bash
 go mod init example.com
 go mod tidy
-go build -ldflags="-s -w" -trimpath -o yas-lite TP1.go YAScore.go lite.go
+go build -ldflags="-s -w" -trimpath -o yas-lite core.go lite.go
 ```
 
 windows gui
 ```bat
 go mod init example.com
 go mod tidy
-go build -ldflags="-H windowsgui -s -w" -trimpath -o yas.exe TP1.go GUIext.go MemView.go YAScore.go main.go
+go build -ldflags="-H windowsgui -s -w" -trimpath -o yas.exe core.go pages.go main.go
 ```
 
 linux/mac gui
 ```bash
 go mod init example.com
 go mod tidy
-go build -ldflags="-s -w" -trimpath -o yas TP1.go GUIext.go MemView.go YAScore.go main.go
+go build -ldflags="-s -w" -trimpath -o yas core.go pages.go main.go
 ```
 
 fyne2 GUI requires C compiler and X11 environment. Selection dialog requires Zenity. check and install following packages before build.
@@ -111,25 +109,3 @@ gcc --version
 sudo apt install zenity
 sudo apt-get install pkg-config libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev
 ```
-
-## USAG-TP1 protocol
-
-`USAG-TP1`은 근거리 네트워크에서 데이터나 zip 파일을 종단간 암호화로 전송하는 프로토콜입니다. 기본 포트는 데이터 전송은 8001, 파일 전송은 8002입니다.
-`USAG-TP1` is a protocol for end-to-end encrypted transfer of data or ZIP files over a local area network. The default port for data transfer is 8001, and for file transfer is 8002.
-
-- 수신자가 포트를 엽니다. The receiver opens a port.
-- 송신자가 포트를 열고 TCP 소켓을 연결합니다. The sender opens a port and establishes a TCP socket connection.
-- 송신자가 통신개시 패킷(매직 4B, 모드 2B)을 보냅니다. The sender transmits a communication initialization packet (Magic 4B, Mode 2B).
-- 송신자와 수신자가 키 교환을 수행하여 핸드쉐이크합니다. 이때 사전에 공유된 암구호 S가 사용될 수 있습니다. The sender and receiver perform a handshake by executing a key exchange. A pre-shared passphrase S may be used.
-    - 전송 순서 Transmission Order: 송신자 인증 -> 수신자 인증 -> 송신자 공개키 -> 수신자 공개키 Sender Authentication -> Receiver Authentication -> Sender Public Key -> Receiver Public Key
-    - 인증 패킷 Authentication Packet: (논스 8B, 해시 32B), 해시 대상: 논스 + 공개키 + S (Nonce 8B, Hash 32B), Hash Target: Nonce + Public Key + S
-    - 공개키 패킷 Public Key Packet: (길이 2B, 공개키) (Length 2B, Public Key)
-- 수신자가 공개키를 만들고 통신개시 패킷(공개키길이 2B, 공개키)을 전송합니다. The receiver generates its own public key and transmits a communication initialization packet (Public Key Length 2B, Public Key).
-- 송신자가 수신자의 공개키로 내용을 암호화하고 서명합니다. 동시에 하트비트 패킷(8B, 0은 진행 중, 최댓값은 오류 발생)을 보냅니다. The sender encrypts and signs the content using the receiver's public key. Simultaneously, it sends heartbeat packets (8B; 0 indicates "in progress," while the maximum value indicates an "error").
-- 암호화가 완료되면 전송예고 패킷(8B, 총 전송 크기)을 보냅니다. Once encryption is complete, the sender transmits a transmission announcement packet (8B; total transmission size).
-- 송신자는 데이터를 전송하고 수신자가 완료 패킷(8B)을 반송하여 통신을 끝냅니다. The sender transfers the data, and the receiver ends the communication by returning a completion packet (8B).
-
-Algorithm standard
-
-- for data transfer: gcm1
-- for file transfer: gcmx1, zip1

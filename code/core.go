@@ -481,6 +481,10 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 	pg.OnUpdate(0.2) // header is 10%
 
 	// 5. encrypt
+	if err := sm.Init(sm.Algo, ops.BodyKey); err != nil {
+		pg.OnError(err)
+		return err
+	}
 	stop := make(chan bool, 1)
 	done := make(chan bool, 1)
 	go func() {
@@ -497,10 +501,6 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 			}
 		}
 	}()
-	if err := sm.Init(sm.Algo, ops.BodyKey); err != nil {
-		pg.OnError(err)
-		return err
-	}
 	writed += ops.BodySize // bodySize
 	err = sm.EnFile(zf, zsize, f)
 	stop <- true

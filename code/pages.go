@@ -1157,7 +1157,7 @@ func (p *Page5) Decrypt(data string, dst string, pwc *PwCplx) {
 		msg, smsg, res, err = DecFileMem(p.Targets[p.selected], pwc, nil, pg)
 		if err == nil {
 			viewer := new(MemView.MemView)
-			viewer.Main(MainApp, "YAS Viewer", res, savemem, true, -1)
+			viewer.Main(MainApp, "YAS Viewer", res, savemem, false, true, -1)
 		}
 	} else { // normal-mode
 		if p.selected < 0 || p.selected >= len(p.Targets) {
@@ -1657,7 +1657,7 @@ func (p *Page7) Decrypt(data string, dst string, pubc *PubCplx) {
 		msg, smsg, res, err = DecFileMem(p.Targets[p.selected], nil, pubc, pg)
 		if err == nil {
 			viewer := new(MemView.MemView)
-			viewer.Main(MainApp, "YAS Viewer", res, savemem, true, -1)
+			viewer.Main(MainApp, "YAS Viewer", res, savemem, false, true, -1)
 		}
 	} else { // normal-mode
 		if p.selected < 0 || p.selected >= len(p.Targets) {

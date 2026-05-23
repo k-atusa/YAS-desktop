@@ -634,9 +634,11 @@ func (m *MainPage) ResetTimer() {
 	m.LogoutTime = time.Now().Add(time.Duration(m.Config.AutoExpire) * time.Minute)
 	m.LogoutTimer = time.AfterFunc(time.Duration(m.Config.AutoExpire)*time.Minute, func() {
 		fyne.Do(func() {
-			sclear(m.Account.PW)
-			sclear(m.Account.KF)
-			m.Account = nil
+			if m.Account != nil {
+				sclear(m.Account.PW)
+				sclear(m.Account.KF)
+				m.Account = nil
+			}
 			m.Window.Close()
 		})
 	})

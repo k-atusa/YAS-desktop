@@ -37,13 +37,12 @@ func savemem(name string, data []byte) {
 
 // ===== config =====
 type U1Config struct {
-	AutoExpire int               `json:"expire"`
-	Size       float32           `json:"size"`
-	DoPad      bool              `json:"dopad"`
-	InitDir    string            `json:"initdir"`
-	Accounts   []string          `json:"accounts"`
-	IPs        []string          `json:"ips"`
-	PublicKeys map[string][]byte `json:"pubkeys"`
+	AutoExpire int      `json:"expire"`
+	Size       float32  `json:"size"`
+	DoPad      bool     `json:"dopad"`
+	InitDir    string   `json:"initdir"`
+	Accounts   []string `json:"accounts"`
+	IPs        []string `json:"ips"`
 }
 
 func (c *U1Config) Load() error {
@@ -56,7 +55,6 @@ func (c *U1Config) Load() error {
 			c.InitDir = ""
 			c.Accounts = []string{}
 			c.IPs = []string{"127.0.0.1"}
-			c.PublicKeys = map[string][]byte{}
 			return c.Store()
 		}
 		return err
@@ -74,35 +72,13 @@ func (c *U1Config) Store() error {
 	return os.WriteFile(filepath.Join(TP1.GetPath(), "config.json"), data, 0644)
 }
 
-// get public key name list
-func (c *U1Config) GetPub() []string {
-	keys := make([]string, 0, len(c.PublicKeys))
-	for k := range c.PublicKeys {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
-}
-
-// add public key
-func (c *U1Config) AddPub(name string, keytype string, pub []byte) error {
-	key := fmt.Sprintf("%s (%s, %s)", name, keytype, Opsec.Crc32(pub))
-	c.PublicKeys[key] = pub
-	return c.Store()
-}
-
-// delete public key
-func (c *U1Config) DelPub(key string) error {
-	delete(c.PublicKeys, key)
-	return c.Store()
-}
-
 // ===== account =====
 type Account struct {
 	KeyType  string // rsa1, rsa2, ecc1, pqc1
 	PubKey   []byte
 	PriKey   []byte            // masked
 	KeyFiles map[string][]byte // masked
+	PubKeys  map[string][]byte
 
 	Path  string
 	PW    []byte // masked
@@ -130,13 +106,43 @@ func (a *Account) NewKey() error {
 	return err
 }
 
-func (a *Account) GetList() []string {
+func (a *Account) GetList(isKF bool) []string {
 	list := make([]string, 0)
-	for nm := range a.KeyFiles {
-		list = append(list, nm)
+	if isKF {
+		for nm := range a.KeyFiles {
+			list = append(list, nm)
+		}
+	} else {
+		for nm := range a.PubKeys {
+			list = append(list, nm)
+		}
 	}
 	slices.Sort(list)
 	return list
+}
+
+func (a *Account) AddKey(name string, masked []byte) error {
+	unmasked, _ := a.Mask.XOR(masked)
+	defer sclear(unmasked)
+	key := fmt.Sprintf("%s (%dB, %s)K", name, len(masked), Opsec.Crc32(unmasked))
+	a.KeyFiles[key] = masked
+	return a.Store()
+}
+
+func (a *Account) DelKey(key string) error {
+	delete(a.KeyFiles, key)
+	return a.Store()
+}
+
+func (a *Account) AddPub(name string, keytype string, pub []byte) error {
+	key := fmt.Sprintf("%s (%s, %s)P", name, keytype, Opsec.Crc32(pub))
+	a.PubKeys[key] = pub
+	return a.Store()
+}
+
+func (a *Account) DelPub(key string) error {
+	delete(a.PubKeys, key)
+	return a.Store()
 }
 
 func (a *Account) Load() error {
@@ -205,13 +211,18 @@ func (a *Account) Load() error {
 		return err
 	}
 
-	// 5. mask key files
+	// 5. mask key files, public keys
 	a.KeyFiles = make(map[string][]byte)
+	a.PubKeys = make(map[string][]byte)
 	for name, data := range Opsec.DecodeCfg(plainkf) {
-		a.KeyFiles[name], err = a.Mask.XOR(data)
-		sclear(data)
-		if err != nil {
-			return err
+		if strings.HasSuffix(name, "P") { // public key
+			a.PubKeys[name] = bytes.Clone(data)
+		} else { // key file
+			a.KeyFiles[name], err = a.Mask.XOR(data)
+			sclear(data)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -247,6 +258,9 @@ func (a *Account) Store() error {
 		if err != nil {
 			return err
 		}
+	}
+	for name, data := range a.PubKeys {
+		tm[name] = bytes.Clone(data)
 	}
 	plainkf, err := Opsec.EncodeCfg(tm)
 	defer sclear(plainkf)

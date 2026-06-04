@@ -260,8 +260,12 @@ func (p *Page1) Fill() {
 
 	// group2: key config
 	p.KeyData = p.Account.PriKey
-	lbl2 := widget.NewLabel(fmt.Sprintf("[%dB %s] default", len(p.KeyData), Opsec.Crc32(p.KeyData)))
-	sel2 := widget.NewSelect(p.Config.GetPub(), func(s string) { BaseUI.ChooseKF(lbl2, &p.KeyData, s, p.Config.PublicKeys, nil); p.IsMasked = false })
+	p.IsMasked = true
+	tk, _ := p.Account.Mask.XOR(p.Account.PriKey)
+	crcv := Opsec.Crc32(tk)
+	sclear(tk)
+	lbl2 := widget.NewLabel(fmt.Sprintf("[%dB %s] default", len(p.KeyData), crcv))
+	sel2 := widget.NewSelect(p.Account.GetList(false), func(s string) { BaseUI.ChooseKF(lbl2, &p.KeyData, s, p.Account.PubKeys, nil); p.IsMasked = false })
 	sel2.PlaceHolder = "Select from Contacts"
 	btn2a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { BaseUI.SelectPub(lbl2, &p.KeyData, p.Account.PriKey, p.Account.Mask); p.IsMasked = true })
 	ent2 := widget.NewEntry()
@@ -796,7 +800,7 @@ func (p *Page4) Fill() {
 	// group4: keyfile selection
 	p.kf = nil
 	lbl4 := widget.NewLabel("[0B 00000000] keyfile not selected")
-	sel4 := widget.NewSelect(p.Account.GetList(), func(s string) { BaseUI.ChooseKF(lbl4, &p.kf, s, p.Account.KeyFiles, p.Account.Mask) })
+	sel4 := widget.NewSelect(p.Account.GetList(true), func(s string) { BaseUI.ChooseKF(lbl4, &p.kf, s, p.Account.KeyFiles, p.Account.Mask) })
 	sel4.PlaceHolder = "Select from Account"
 	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { BaseUI.SelectKF(lbl4, &p.kf, p.Account.Mask) })
 	ent4 := widget.NewEntry()
@@ -1010,7 +1014,7 @@ func (p *Page5) Fill() {
 	// group4: keyfile selection
 	p.kf = nil
 	lbl4 := widget.NewLabel("[0B 00000000] keyfile not selected")
-	sel4 := widget.NewSelect(p.Account.GetList(), func(s string) { BaseUI.ChooseKF(lbl4, &p.kf, s, p.Account.KeyFiles, p.Account.Mask) })
+	sel4 := widget.NewSelect(p.Account.GetList(true), func(s string) { BaseUI.ChooseKF(lbl4, &p.kf, s, p.Account.KeyFiles, p.Account.Mask) })
 	sel4.PlaceHolder = "Select from Account"
 	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { BaseUI.SelectKF(lbl4, &p.kf, p.Account.Mask) })
 	ent4 := widget.NewEntry()
@@ -1258,7 +1262,7 @@ func (p *Page6) Fill() {
 	// group4: public key
 	p.pub = nil
 	lbl4 := widget.NewLabel("[0B 00000000] default")
-	sel4 := widget.NewSelect(p.Config.GetPub(), func(s string) { BaseUI.ChooseKF(lbl4, &p.pub, s, p.Config.PublicKeys, nil) })
+	sel4 := widget.NewSelect(p.Account.GetList(false), func(s string) { BaseUI.ChooseKF(lbl4, &p.pub, s, p.Account.PubKeys, nil) })
 	sel4.PlaceHolder = "Select from Contacts"
 	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { BaseUI.SelectPub(lbl4, &p.pub, nil, nil) })
 	ent4 := widget.NewEntry()
@@ -1484,7 +1488,7 @@ func (p *Page7) Fill() {
 	// group3: peer public key
 	p.peerPub = nil
 	lbl3 := widget.NewLabel("[0B 00000000] default")
-	sel3 := widget.NewSelect(p.Config.GetPub(), func(s string) { BaseUI.ChooseKF(lbl3, &p.peerPub, s, p.Config.PublicKeys, nil) })
+	sel3 := widget.NewSelect(p.Account.GetList(false), func(s string) { BaseUI.ChooseKF(lbl3, &p.peerPub, s, p.Account.PubKeys, nil) })
 	sel3.PlaceHolder = "Select from Contacts"
 	btn3a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { BaseUI.SelectPub(lbl3, &p.peerPub, nil, nil) })
 	ent3 := widget.NewEntry()
@@ -1499,7 +1503,7 @@ func (p *Page7) Fill() {
 	// group4: my public key
 	p.myPub = nil
 	lbl4 := widget.NewLabel("[0B 00000000] default")
-	sel4 := widget.NewSelect(p.Config.GetPub(), func(s string) { BaseUI.ChooseKF(lbl4, &p.myPub, s, p.Config.PublicKeys, nil) })
+	sel4 := widget.NewSelect(p.Account.GetList(false), func(s string) { BaseUI.ChooseKF(lbl4, &p.myPub, s, p.Account.PubKeys, nil) })
 	sel4.PlaceHolder = "Select from Contacts"
 	btn4a := widget.NewButtonWithIcon("Select", theme.FileIcon(), func() { BaseUI.SelectPub(lbl4, &p.myPub, nil, nil) })
 	ent4 := widget.NewEntry()
@@ -1728,7 +1732,7 @@ func (p *Page8) Fill() {
 	})
 	btn0b.Importance = widget.DangerImportance
 	box0 := container.NewVBox(
-		widget.NewLabelWithStyle("Manage IP/Port (Config)", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Manage IP/Port", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		container.NewBorder(nil, nil, nil,
 			container.NewGridWithRows(2, btn0a, btn0b),
 			container.NewGridWithRows(2, ent0, sel0),
@@ -1740,7 +1744,7 @@ func (p *Page8) Fill() {
 	ent1a.SetPlaceHolder("New public key name")
 	ent1b := widget.NewMultiLineEntry()
 	ent1b.SetPlaceHolder("New public key data")
-	pubs := p.Config.GetPub()
+	pubs := p.Account.GetList(false)
 	sel1a := widget.NewSelect([]string{"rsa1", "rsa2", "ecc1", "pqc1"}, func(s string) { p.pubType = s })
 	sel1a.SetSelected("pqc1")
 	p.pubType = "pqc1"
@@ -1760,8 +1764,8 @@ func (p *Page8) Fill() {
 				dialog.ShowError(err, p.Window)
 				return
 			}
-			err = p.Config.AddPub(ent1a.Text, p.pubType, newpub)
-			pubs = p.Config.GetPub()
+			err = p.Account.AddPub(ent1a.Text, p.pubType, newpub)
+			pubs = p.Account.GetList(false)
 			sel1b.Options = pubs
 			sel1b.Refresh()
 			if err == nil {
@@ -1777,8 +1781,8 @@ func (p *Page8) Fill() {
 	btn1b := widget.NewButtonWithIcon("Del", theme.ContentRemoveIcon(), func() {
 		dialog.ShowConfirm("Confirm", "Delete this public key?", func(ok bool) {
 			if ok && p.pubSelected != "" {
-				err := p.Config.DelPub(p.pubSelected)
-				pubs = p.Config.GetPub()
+				err := p.Account.DelPub(p.pubSelected)
+				pubs = p.Account.GetList(false)
 				sel1b.Options = pubs
 				sel1b.Refresh()
 				if err == nil {
@@ -1791,7 +1795,7 @@ func (p *Page8) Fill() {
 	})
 	btn1b.Importance = widget.DangerImportance
 	box1 := container.NewVBox(
-		widget.NewLabelWithStyle("Manage public keys (Config)", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Manage public keys", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		ent1a, ent1b,
 		container.NewBorder(nil, nil, nil,
 			container.NewGridWithRows(2, btn1a, btn1b),
@@ -1809,16 +1813,15 @@ func (p *Page8) Fill() {
 	ent2b.SetPlaceHolder("New keyfile name")
 
 	// group3: del keyfile
-	kfs := p.Account.GetList()
+	kfs := p.Account.GetList(true)
 	sel3 := widget.NewSelect(kfs, func(s string) { p.kfSelected = s })
 	sel3.PlaceHolder = "Keyfile list"
 	p.kfSelected = ""
 
 	btn2c := widget.NewButtonWithIcon("Add", theme.ContentAddIcon(), func() {
 		if p.kf != nil && ent2b.Text != "" {
-			p.Account.KeyFiles[ent2b.Text] = p.kf // direct add (both masked)
-			err := p.Account.Store()
-			kfs = p.Account.GetList()
+			err := p.Account.AddKey(ent2b.Text, p.kf)
+			kfs = p.Account.GetList(true)
 			sel3.Options = kfs
 			sel3.Refresh()
 			if err == nil {
@@ -1835,9 +1838,8 @@ func (p *Page8) Fill() {
 	btn3 := widget.NewButtonWithIcon("Del", theme.ContentRemoveIcon(), func() {
 		dialog.ShowConfirm("Confirm", "Delete this keyfile?", func(ok bool) {
 			if ok && p.kfSelected != "" {
-				delete(p.Account.KeyFiles, p.kfSelected)
-				err := p.Account.Store()
-				kfs = p.Account.GetList()
+				err := p.Account.DelKey(p.kfSelected)
+				kfs = p.Account.GetList(true)
 				sel3.Options = kfs
 				sel3.Refresh()
 				if err == nil {
@@ -1861,9 +1863,9 @@ func (p *Page8) Fill() {
 	box4 := container.NewGridWithColumns(2,
 		container.NewVBox(box0, widget.NewSeparator(), box1),
 		container.NewVBox(
-			widget.NewLabelWithStyle("Add keyfile (Account)", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}), box2,
+			widget.NewLabelWithStyle("Add keyfile", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}), box2,
 			widget.NewSeparator(),
-			widget.NewLabelWithStyle("Delete keyfile (Account)", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}), box3,
+			widget.NewLabelWithStyle("Delete keyfile", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}), box3,
 		),
 	)
 	p.Content.Objects = []fyne.CanvasObject{box4}

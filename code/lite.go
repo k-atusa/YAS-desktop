@@ -629,7 +629,7 @@ func main() {
 		fmt.Println(YAS_VERSION)
 		fmt.Println("-m mode [pack unpack send recv genkey sign enc dec]")
 		fmt.Println("-o outputDir|Path, -t text|ip:port/secret, -msg message, -smsg securedMessage -nopad")
-		fmt.Println("-pw password, -kf keyFile, -pub publicKey, -pri privateKey")
+		fmt.Println("-pw password, -kf keyFile, -pub peerPublic, -mypub myPublic, -mypri myPrivate")
 		fmt.Println("options: [webp png bin] [tar1 zip1] [gcmx1 gcm1] [sha3 pbk2 arg2] [rsa1 rsa2 ecc1 pqc1]")
 	}
 	if err != nil {

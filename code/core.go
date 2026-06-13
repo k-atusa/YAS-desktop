@@ -18,7 +18,7 @@ import (
 	"github.com/taewook427/USAG-KOX/TP1"
 )
 
-const YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.4.0"
+const YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.4.1"
 const LIMIT_BIG int64 = 512 * 1048576
 const LIMIT_IMAGE int64 = 16 * 1048576
 

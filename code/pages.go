@@ -419,9 +419,13 @@ func (p *Page1) Verify() {
 	// 2. verify
 	am := new(Bencrypt.AsymMaster)
 	err = am.Init(p.Account.KeyType)
-	if err == nil && p.IsMasked {
-		key, err = p.Account.Mask.XOR(p.KeyData)
-		defer sclear(key)
+	if err == nil {
+		if p.IsMasked {
+			key, err = p.Account.Mask.XOR(p.KeyData)
+			defer sclear(key)
+		} else {
+			key = p.KeyData
+		}
 	}
 	if err == nil {
 		err = am.Loadkey(key, nil)

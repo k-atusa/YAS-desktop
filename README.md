@@ -54,7 +54,7 @@ Algorithm flags
 | Extend | Extends the login session. | 로그인 세션을 연장합니다. |
 | Logout | Terminates the login session. | 로그인 세션을 종료합니다. |
 
-- config.json은 암호화되지 않으며 자동 세션 만료, 공개키 정보, 계정 파일 경로 등을 보관합니다. config.json is not encrypted and stores session expiration settings, public key info, and account file paths.
+- config.json은 암호화되지 않으며 자동 세션 만료와 계정 파일 경로 등을 보관합니다. config.json is not encrypted and stores session expiration settings and account file paths.
 - 계정 파일은 Opsec 형식으로 암호화되며 내부에 공개키/개인키 쌍과 키 파일을 보관할 수 있습니다. Account files are encrypted in Opsec format and can store public/private key pairs and key files.
 - 공개키는 변조되지 않는 채널로 공유한다면 노출되어도 괜찮지만, 개인키는 절대 유출되어선 안 됩니다. While public keys can be shared (provided the channel is secure), private keys must never be exposed.
 - 키 파일이나 개인키, 상대 공개키 등을 AFT 볼트 안에 보관하고 TP1으로 받아오면 더 안전합니다. It is safer to store key files, private keys, and relative public keys in an AFT Vault and retrieve them via TP1.
@@ -69,7 +69,6 @@ Algorithm flags
 | initdir | string | Initial directory (no change if empty) | 초기 디렉토리 (비어있으면 변경하지 않음) |
 | accounts | string[] | Account file paths | 계정 파일 경로 목록 |
 | ips | string[] | IP/port shortcuts | IP/포트 단축 목록 |
-| pubkeys | string:bytes | Public key address book | 공개키 주소록 |
 
 ## Build Executable
 

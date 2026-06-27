@@ -570,10 +570,10 @@ func (p *Page2) Send(addr string, secret []byte, smsg string) {
 		Pg:     pg,
 	}
 	switch p.Account.KeyType {
-	case "rsa1", "rsa2":
-		nc.HashMode, nc.PubMode = "pbk2", p.Account.KeyType
-	case "ecc1", "pqc1":
-		nc.HashMode, nc.PubMode = "arg2", p.Account.KeyType
+	case "ecc1":
+		nc.HashMode, nc.PubMode = "arg2low", p.Account.KeyType
+	case "pqc1":
+		nc.HashMode, nc.PubMode = "arg2st", p.Account.KeyType
 	default:
 		err = errors.New("Unsupported key type")
 	}
@@ -781,10 +781,10 @@ func (p *Page4) Fill() {
 	p.progbar = widget.NewProgressBar()
 	txt := "Encrypt with password"
 	switch p.Account.KeyType {
-	case "rsa1", "rsa2":
-		txt += " | pbk2"
-	case "ecc1", "pqc1":
-		txt += " | arg2"
+	case "ecc1":
+		txt += " | arg2low"
+	case "pqc1":
+		txt += " | arg2st"
 	}
 	box2 := container.NewVBox(widget.NewLabelWithStyle(txt, fyne.TextAlignCenter, fyne.TextStyle{Bold: true}), p.status, p.progbar)
 
@@ -834,10 +834,10 @@ func (p *Page4) Fill() {
 		// PwCplx
 		pwc := new(PwCplx)
 		switch p.Account.KeyType {
-		case "rsa1", "rsa2":
-			pwc.AlgoType = "pbk2"
-		case "ecc1", "pqc1":
-			pwc.AlgoType = "arg2"
+		case "ecc1":
+			pwc.AlgoType = "arg2low"
+		case "pqc1":
+			pwc.AlgoType = "arg2st"
 		}
 		pw := Bencode.NormPW(ent5a.Text)
 		pwc.PW, _ = p.Account.Mask.XOR(pw)
@@ -1105,7 +1105,7 @@ func (p *Page5) View() string {
 	}
 	defer f.Close()
 	ops := new(Opsec.Opsec)
-	ops.Reset()
+	ops.Init()
 	header, err := ops.Read(f, 0)
 	if err != nil {
 		return ""
@@ -1605,7 +1605,7 @@ func (p *Page7) View() string {
 	}
 	defer f.Close()
 	ops := new(Opsec.Opsec)
-	ops.Reset()
+	ops.Init()
 	header, err := ops.Read(f, 0)
 	if err != nil {
 		return ""
@@ -1749,7 +1749,7 @@ func (p *Page8) Fill() {
 	ent1b := widget.NewMultiLineEntry()
 	ent1b.SetPlaceHolder("New public key data")
 	pubs := p.Account.GetList(false)
-	sel1a := widget.NewSelect([]string{"rsa1", "rsa2", "ecc1", "pqc1"}, func(s string) { p.pubType = s })
+	sel1a := widget.NewSelect([]string{"ecc1", "pqc1"}, func(s string) { p.pubType = s })
 	sel1a.SetSelected("pqc1")
 	p.pubType = "pqc1"
 	sel1b := widget.NewSelect(pubs, func(s string) { p.pubSelected = s })

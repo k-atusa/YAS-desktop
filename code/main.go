@@ -74,7 +74,7 @@ func (c *U1Config) Store() error {
 
 // ===== account =====
 type Account struct {
-	KeyType  string // rsa1, rsa2, ecc1, pqc1
+	KeyType  string // ecc1, pqc1
 	PubKey   []byte
 	PriKey   []byte            // masked
 	KeyFiles map[string][]byte // masked
@@ -153,12 +153,8 @@ func (a *Account) Load() error {
 	}
 	defer f.Close()
 	o := new(Opsec.Opsec)
-	defer func() {
-		o.Smsg = ""
-		sclear(o.BodyKey)
-		sclear(o.SmsgInfo)
-	}()
-	o.Reset()
+	o.Init()
+	defer o.Clear()
 	header, err := o.Read(f, 0)
 	if err != nil {
 		return err
@@ -269,18 +265,14 @@ func (a *Account) Store() error {
 	}
 	sm := new(Bencrypt.SymMaster)
 	defer func() { sclear(sm.Key) }()
-	if err := sm.Init("gcm1", make([]byte, 44)); err != nil {
+	if err := sm.Init("gcm1", make([]byte, 32)); err != nil {
 		return err
 	}
 
 	// 2. make header and bodykey
 	o := new(Opsec.Opsec)
-	defer func() {
-		o.Smsg = ""
-		sclear(o.BodyKey)
-		sclear(o.SmsgInfo)
-	}()
-	o.Reset()
+	o.Init()
+	defer o.Clear()
 	o.Msg, o.SmsgInfo, o.BodySize, o.BodyAlgo = a.Msg, smsgi, sm.AfterSize(int64(len(plainkf))), sm.Algo
 	var header []byte
 	pw, _ := a.Mask.XOR(a.PW)
@@ -288,10 +280,10 @@ func (a *Account) Store() error {
 	kf, _ := a.Mask.XOR(a.KF)
 	defer sclear(kf)
 	switch a.KeyType {
-	case "rsa1", "rsa2":
-		header, err = o.Encpw("pbk2", pw, kf)
-	case "ecc1", "pqc1":
-		header, err = o.Encpw("arg2", pw, kf)
+	case "ecc1":
+		header, err = o.Encpw("arg2low", pw, kf)
+	case "pqc1":
+		header, err = o.Encpw("arg2st", pw, kf)
 	default:
 		return errors.New("unsupported account type")
 	}
@@ -469,7 +461,7 @@ func (l *LoginPage) Fill() {
 	sel4c := widget.NewSelect([]string{"webp", "png", "bin"}, func(s string) { l.NewImg = s })
 	sel4c.SetSelected("webp")
 	l.NewImg = "webp"
-	sel4d := widget.NewSelect([]string{"rsa1", "rsa2", "ecc1", "pqc1"}, func(s string) { l.NewType = s })
+	sel4d := widget.NewSelect([]string{"ecc1", "pqc1"}, func(s string) { l.NewType = s })
 	sel4d.SetSelected("pqc1")
 	l.NewType = "pqc1"
 

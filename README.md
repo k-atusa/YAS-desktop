@@ -1,4 +1,4 @@
-# YAS-desktop v1.4.1
+# YAS-desktop v1.5.0
 
 project USAG: Yet Another Security desktop version
 
@@ -28,8 +28,8 @@ Algorithm flags
 | Image | webp, png, bin | Sets camouflage image format (Default: webp). |
 | Packing | zip1, tar1 | Sets archiving format (Default: tar1). |
 | Enc Mode | gcm1, gcmx1 | Sets body encryption algorithm (Default: gcmx1). |
-| PW Mode | sha3, pbk2, arg2 | Sets password derivation algorithm (Default: arg2). |
-| Pub Mode | rsa1, rsa2, ecc1, pqc1 | Sets asymmetric key type (Default: pqc1). |
+| PW Mode | sha3, arg2low, arg2st | Sets password derivation algorithm (Default: arg2st). |
+| Pub Mode | ecc1, pqc1 | Sets asymmetric key type (Default: pqc1). |
 
 - pack/unpack: 여러 파일을 하나로 아카이빙하거나 패키징된 파일을 해제합니다. Archives multiple files into one or extracts a packaged file.
 - send/recv: USAG-TP1 프로토콜로 메시지나 파일들을 다른 기기에 안전하게 전송합니다. Securely transfers messages or files to another device using the USAG-TP1 protocol.

@@ -20,7 +20,7 @@ type Config struct {
 	Output    string          // output path
 	Files     []string        // target files
 	Text      string          // target text or address/secret
-	TypeWords map[string]bool // keyword: webp png bin, zip1 tar1, gcm1 gcmx1, sha3 pbk2 arg2, rsa1 rsa2 ecc1 pqc1
+	TypeWords map[string]bool // keyword: webp png bin, zip1 tar1, gcm1 gcmx1, sha3 arg2low arg2st, ecc1 pqc1
 	NoPad     bool            // disable opsec padding
 
 	PW        []byte // masked password
@@ -51,7 +51,7 @@ func (cfg *Config) Init() {
 	fs.BoolVar(&cfg.NoPad, "nopad", false, "disable opsec padding")
 
 	// keywords
-	magics := []string{"webp", "png", "bin", "zip1", "tar1", "gcm1", "gcmx1", "sha3", "pbk2", "arg2", "rsa1", "rsa2", "ecc1", "pqc1"}
+	magics := []string{"webp", "png", "bin", "zip1", "tar1", "gcm1", "gcmx1", "sha3", "arg2low", "arg2st", "ecc1", "pqc1"}
 	mflags := make([]bool, len(magics))
 	for i, r := range magics {
 		fs.BoolVar(&mflags[i], r, false, "keyword: "+r)
@@ -152,12 +152,12 @@ func (cfg *Config) Init() {
 
 func (cfg *Config) ToPwCplx() *PwCplx {
 	c := &PwCplx{PW: cfg.PW, KF: cfg.KF}
-	c.AlgoType = "arg2" // default
+	c.AlgoType = "arg2st" // default
 	switch {
-	case cfg.TypeWords["arg2"]:
-		c.AlgoType = "arg2"
-	case cfg.TypeWords["pbk2"]:
-		c.AlgoType = "pbk2"
+	case cfg.TypeWords["arg2st"]:
+		c.AlgoType = "arg2st"
+	case cfg.TypeWords["arg2low"]:
+		c.AlgoType = "arg2low"
 	case cfg.TypeWords["sha3"]:
 		c.AlgoType = "sha3"
 	}
@@ -172,10 +172,6 @@ func (cfg *Config) ToPubCplx() *PubCplx {
 		c.AlgoType = "pqc1"
 	case cfg.TypeWords["ecc1"]:
 		c.AlgoType = "ecc1"
-	case cfg.TypeWords["rsa1"]:
-		c.AlgoType = "rsa1"
-	case cfg.TypeWords["rsa2"]:
-		c.AlgoType = "rsa2"
 	}
 	return c
 }
@@ -347,10 +343,6 @@ func f_genkey() error {
 	var pub, pri string
 	var err error
 	switch {
-	case Cfg.TypeWords["rsa1"]:
-		pubNm, priNm, algo = "public_rsa1.txt", "private_rsa1.txt", "rsa1"
-	case Cfg.TypeWords["rsa2"]:
-		pubNm, priNm, algo = "public_rsa2.txt", "private_rsa2.txt", "rsa2"
 	case Cfg.TypeWords["ecc1"]:
 		pubNm, priNm, algo = "public_ecc1.txt", "private_ecc1.txt", "ecc1"
 	case Cfg.TypeWords["pqc1"]:
@@ -630,7 +622,7 @@ func main() {
 		fmt.Println("-m mode [pack unpack send recv genkey sign enc dec]")
 		fmt.Println("-o outputDir|Path, -t text|ip:port/secret, -msg message, -smsg securedMessage -nopad")
 		fmt.Println("-pw password, -kf keyFile, -pub peerPublic, -mypub myPublic, -mypri myPrivate")
-		fmt.Println("options: [webp png bin] [tar1 zip1] [gcmx1 gcm1] [sha3 pbk2 arg2] [rsa1 rsa2 ecc1 pqc1]")
+		fmt.Println("options: [webp png bin] [tar1 zip1] [gcmx1 gcm1] [sha3 arg2low arg2st] [ecc1 pqc1]")
 	}
 	if err != nil {
 		fmt.Printf("\n[ERROR] %v\n", err)

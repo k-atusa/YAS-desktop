@@ -18,7 +18,7 @@ import (
 	"github.com/taewook427/USAG-KOX/TP1"
 )
 
-const YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.4.1"
+const YAS_VERSION string = "2026 @k-atusa [USAG] YAS v1.5.0"
 const LIMIT_BIG int64 = 512 * 1048576
 const LIMIT_IMAGE int64 = 16 * 1048576
 
@@ -61,14 +61,14 @@ func GetPrehead(tp string, img string, ismsg bool) []byte {
 
 // password complex
 type PwCplx struct {
-	AlgoType string // sha3, pbk2, arg2
+	AlgoType string // sha3, arg2low, arg2st
 	PW       []byte // masked
 	KF       []byte // masked
 }
 
 // public key complex
 type PubCplx struct {
-	AlgoType string // rsa1, rsa2, ecc1, pqc1
+	AlgoType string // ecc1, pqc1
 	PeerPub  []byte
 	MyPub    []byte
 	MyPri    []byte // masked
@@ -133,8 +133,8 @@ type NetCplx struct {
 	Addr   string // ip:port, port
 	Secret []byte // masked
 
-	HashMode string // sha3, pbk2, arg2
-	PubMode  string // rsa1, rsa2, ecc1, pqc1
+	HashMode string // sha3, arg2low, arg2st
+	PubMode  string // ecc1, pqc1
 	DoPad    bool
 
 	Pg ProgStatus
@@ -175,16 +175,12 @@ func Send(srcs []string, smsg string, netc *NetCplx) ([]byte, []byte, error) {
 	switch netc.HashMode {
 	case "sha3":
 		con += TP1.HASH_SHA3
-	case "pbk2":
-		con += TP1.HASH_PBK2
-	case "arg2":
-		con += TP1.HASH_ARG2
+	case "arg2low":
+		con += TP1.HASH_ARG2_LOW
+	case "arg2st":
+		con += TP1.HASH_ARG2_ST
 	}
 	switch netc.PubMode {
-	case "rsa1":
-		con += TP1.ASYM_RSA1
-	case "rsa2":
-		con += TP1.ASYM_RSA2
 	case "ecc1":
 		con += TP1.ASYM_ECC1
 	case "pqc1":
@@ -327,8 +323,8 @@ func Receive(dst string, netc *NetCplx) ([]byte, []byte, string, error) {
 func EncMsg(pwc *PwCplx, pubc *PubCplx, cfg *EncCplx, pg ProgStatus) ([]byte, error) {
 	pg.OnStart()
 	ops := new(Opsec.Opsec)
-	defer func() { sclear(ops.BodyKey) }()
-	ops.Reset()
+	ops.Init()
+	defer ops.Clear()
 	ops.Msg, ops.Smsg = cfg.Msg, cfg.Smsg
 	var header []byte
 	var err error
@@ -364,8 +360,8 @@ func EncMsg(pwc *PwCplx, pubc *PubCplx, cfg *EncCplx, pg ProgStatus) ([]byte, er
 func DecMsg(data []byte, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) (string, string, error) {
 	pg.OnStart()
 	ops := new(Opsec.Opsec)
-	defer func() { sclear(ops.BodyKey) }()
-	ops.Reset()
+	ops.Init()
+	defer ops.Clear()
 	header, err := ops.Read(bytes.NewBuffer(data), 0)
 	if err != nil {
 		pg.OnError(err)
@@ -411,7 +407,7 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 	// 2. make worker, get size
 	sm := new(Bencrypt.SymMaster)
 	defer func() { sclear(sm.Key) }()
-	if err := sm.Init(cfg.EncType, make([]byte, 44)); err != nil {
+	if err := sm.Init(cfg.EncType, make([]byte, 32)); err != nil {
 		pg.OnError(err)
 		return err
 	}
@@ -425,8 +421,8 @@ func EncFiles(srcs []string, dst string, pwc *PwCplx, pubc *PubCplx, cfg *EncCpl
 
 	// 3. make header
 	ops := new(Opsec.Opsec)
-	defer func() { sclear(ops.BodyKey) }()
-	ops.Reset()
+	ops.Init()
+	defer ops.Clear()
 	ops.Msg, ops.Smsg = cfg.Msg, cfg.Smsg
 	ops.BodySize, ops.BodyAlgo, ops.BodyInfo = asize, cfg.EncType, []byte(cfg.PackType)
 	var prehead, header []byte
@@ -535,8 +531,8 @@ func DecFile(src string, dst string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) 
 	}
 	defer f.Close()
 	ops := new(Opsec.Opsec)
-	defer func() { sclear(ops.BodyKey) }()
-	ops.Reset()
+	ops.Init()
+	defer ops.Clear()
 	header, err := ops.Read(f, 0)
 	if err != nil {
 		pg.OnError(err)
@@ -641,8 +637,8 @@ func DecFileMem(src string, pwc *PwCplx, pubc *PubCplx, pg ProgStatus) (string, 
 	}
 	defer f.Close()
 	ops := new(Opsec.Opsec)
-	defer func() { sclear(ops.BodyKey) }()
-	ops.Reset()
+	ops.Init()
+	defer ops.Clear()
 	header, err := ops.Read(f, 0)
 	if err != nil {
 		pg.OnError(err)
